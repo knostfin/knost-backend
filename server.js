@@ -1,35 +1,28 @@
-import express from "express";
-import cors from "cors";
-import pkg from "pg";
-const { Pool } = pkg;
+const express = require("express");
+const { Pool } = require("pg");
+const cors = require("cors");
 
 const app = express();
-
-app.use(express.json());
 app.use(cors());
 
-// DB connection
 const pool = new Pool({
-  user: "postgres",
-  password: "postgres",
-  host: "localhost",
-  port: 5432,
-  database: "knostdb"
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
-// Health API
 app.get("/health", async (req, res) => {
   try {
-    const dbResult = await pool.query("SELECT NOW()");
+    const db_res = await pool.query("SELECT NOW()");
     res.json({
       status: "ok",
       database: "connected",
-      serverTime: new Date(),
-      dbTime: dbResult.rows[0].now
+      serverTime: new Date().toISOString(),
+      dbTime: db_res.rows[0].now
     });
-  } catch (error) {
-    res.status(500).json({ status: "error", error: error.message });
+  } catch (err) {
+    res.json({ status: "error", error: err.message });
   }
 });
 
-app.listen(5000, () => console.log("API running on http://localhost:5000"));
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
