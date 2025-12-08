@@ -1,1 +1,14 @@
 node_modules/
+.env
+.env.local
+npm-debug.log*
+coverage/
+dist/
+logs/
+*.log
+node_modules/
+
+.env
+uploads/
+*.DS_Store
+*.env.*
