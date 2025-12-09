@@ -15,7 +15,11 @@ app.set("trust proxy", 1);
 // CORS - MUST be before rate limiting to handle OPTIONS preflight
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "https://knost.in" || "https://www.knost.in" || "http://localhost:3000",
+    origin: [
+      "https://knost.in",
+      "https://www.knost.in",
+      "http://localhost:3000"
+    ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
