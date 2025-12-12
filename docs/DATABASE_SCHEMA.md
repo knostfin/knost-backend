@@ -4,46 +4,64 @@
 
 ### users
 ```sql
-CREATE TABLE users (
-  id SERIAL PRIMARY KEY,
-  firstname VARCHAR(255) NOT NULL,
-  lastname VARCHAR(255) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password VARCHAR(255) NOT NULL,
-  phone VARCHAR(20) UNIQUE,
-  photo_filename VARCHAR(255),
-  photo_mimetype VARCHAR(50),
-  photo_size INT,
-  photo_updated_at TIMESTAMP,
-  email_verified BOOLEAN DEFAULT false,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW(),
-  country_code VARCHAR(10),
-  last_login TIMESTAMP;
+CREATE TABLE public.users (
+	id serial4 NOT NULL,
+	firstname varchar(255) NOT NULL,
+	lastname varchar(255) NOT NULL,
+	email varchar(255) NOT NULL,
+	"password" varchar(255) NOT NULL,
+	phone varchar(20) NULL,
+	photo_filename varchar(255) NULL,
+	photo_mimetype varchar(50) NULL,
+	photo_size int4 NULL,
+	photo_updated_at timestamp NULL,
+	email_verified bool DEFAULT false NULL,
+	created_at timestamp DEFAULT now() NULL,
+	updated_at timestamp DEFAULT now() NULL,
+	country_code varchar(10) NULL,
+	last_login timestamp NULL,
+	photo_url text NULL,
+	CONSTRAINT users_email_key UNIQUE (email),
+	CONSTRAINT users_phone_key UNIQUE (phone),
+	CONSTRAINT users_pkey PRIMARY KEY (id)
 );
 ```
 
 ### refresh_tokens
 ```sql
-CREATE TABLE refresh_tokens (
-  id SERIAL PRIMARY KEY,
-  user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
-  expires_at TIMESTAMP
+CREATE TABLE public.refresh_tokens (
+	id serial4 NOT NULL,
+	user_id int4 NOT NULL,
+	"token" text NOT NULL,
+	created_at timestamp DEFAULT now() NULL,
+	expires_at timestamp NULL,
+	CONSTRAINT refresh_tokens_pkey PRIMARY KEY (id)
 );
 ```
 
 ### email_verifications
 ```sql
-CREATE TABLE email_verifications (
-  id SERIAL PRIMARY KEY,
-  user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  email VARCHAR(255) NOT NULL,
-  token TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
-  expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '1 hour',
-  UNIQUE(user_id)
+CREATE TABLE public.email_verifications (
+	id serial4 NOT NULL,
+	user_id int4 NOT NULL,
+	email varchar(255) NOT NULL,
+	"token" text NOT NULL,
+	created_at timestamp DEFAULT now() NULL,
+	expires_at timestamp DEFAULT (now() + '01:00:00'::interval) NULL,
+	CONSTRAINT email_verifications_pkey PRIMARY KEY (id),
+	CONSTRAINT email_verifications_user_id_key UNIQUE (user_id)
+);
+```
+
+### phone_otps
+```sql
+CREATE TABLE public.phone_otps (
+	id serial4 NOT NULL,
+	phone varchar(20) NOT NULL,
+	otp varchar(6) NOT NULL,
+	expires_at timestamp NOT NULL,
+	created_at timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT phone_otps_pkey PRIMARY KEY (id)
 );
 ```
 

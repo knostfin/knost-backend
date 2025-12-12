@@ -16,6 +16,8 @@ router.put("/profile", authMiddleware, authController.updateProfile);
 router.post("/profile/photo", authMiddleware, upload.single('photo'), authController.uploadProfilePhoto);
 router.post("/change-password", authMiddleware, authController.changePassword);
 router.post("/request-email-verify", authMiddleware, authController.requestEmailVerification);
-router.post("/verify-email", authController.verifyNewEmail); // Public endpoint for token verification
+router.post("/verify-email", authMiddleware, authController.verifyNewEmail); // Protected to match code flow
+router.post("/request-otp", authController.requestOtp);
+router.post("/verify-otp", authController.verifyOtp);
 
 module.exports = router;

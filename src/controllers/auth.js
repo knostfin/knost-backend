@@ -1,11 +1,19 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("../db");
+const { sendVerificationEmail } = require("../services/emailService");
+const { blacklistToken } = require("../services/tokenBlacklistService");
+const { sanitizeUser, devLog } = require("../utils/security");
+
+// Initialize Twilio client
+const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+    ? require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+    : null;
 
 // Generate access token
 function generateAccessToken(user) {
     return jwt.sign(user, process.env.JWT_SECRET, {
-        expiresIn: process.env.JWT_EXPIRES_IN || "1h",
+        expiresIn: process.env.JWT_EXPIRES_IN || "15m", // Reduced from 1h to 15m
     });
 }
 
@@ -14,6 +22,10 @@ function generateRefreshToken(user) {
     return jwt.sign(user, process.env.REFRESH_TOKEN_SECRET, {
         expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || "7d",
     });
+}
+
+function generateOTP() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 // Shape DB user row into response with both snake_case and camelCase keys
@@ -25,13 +37,9 @@ function mapUser(row) {
         lastname: row.lastname,
         email: row.email,
         phone: row.phone,
-        country_code: row.country_code,
         countryCode: row.country_code,
-        created_at: row.created_at,
         createdAt: row.created_at,
-        last_login: row.last_login,
         lastLogin: row.last_login,
-        photo_filename: row.photo_filename,
         photoFilename: row.photo_filename,
     };
 }
@@ -209,9 +217,26 @@ exports.verifyToken = async (req, res) => {
 exports.logout = async (req, res) => {
     try {
         const { refreshToken } = req.body;
+        const accessToken = req.headers.authorization?.split(" ")[1];
 
         if (!refreshToken) {
             return res.status(400).json({ error: "Refresh token required" });
+        }
+
+        // Blacklist the access token if provided
+        if (accessToken) {
+            try {
+                const decoded = jwt.verify(accessToken, process.env.JWT_SECRET);
+                const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
+                
+                if (expiresIn > 0) {
+                    // Only blacklist if token hasn't expired yet
+                    await blacklistToken(accessToken, expiresIn);
+                }
+            } catch (err) {
+                // Token already invalid/expired, no need to blacklist
+                console.log("Access token already invalid:", err.message);
+            }
         }
 
         // Delete the refresh token from DB
@@ -228,6 +253,167 @@ exports.logout = async (req, res) => {
             error: "Server error",
             details: err.message
         });
+    }
+};
+
+// ---------------------- REQUEST OTP -------------------------
+exports.requestOtp = async (req, res) => {
+    try {
+        const { phone, countryCode } = req.body;
+
+        if (!phone) {
+            return res.status(400).json({ error: "Phone number is required" });
+        }
+
+        // Check if user exists
+        const userQuery = await pool.query("SELECT * FROM users WHERE phone = $1", [phone]);
+
+        if (userQuery.rows.length === 0) {
+            return res.status(404).json({ error: "Phone number not registered" });
+        }
+
+        // Format phone number with country code (required for Twilio)
+        const formattedPhone = phone.startsWith('+') ? phone : `${countryCode || '+91'}${phone}`;
+
+        if (twilioClient && process.env.TWILIO_VERIFY_SERVICE_SID) {
+            // Use Twilio Verify API
+            try {
+                const verification = await twilioClient.verify.v2
+                    .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+                    .verifications
+                    .create({ to: formattedPhone, channel: 'sms' });
+
+                res.json({
+                    message: "OTP sent to your phone",
+                    status: verification.status
+                });
+            } catch (twilioErr) {
+                console.error("Twilio error:", twilioErr.message);
+                return res.status(500).json({ 
+                    error: "Failed to send OTP", 
+                    details: twilioErr.message 
+                });
+            }
+        } else {
+            // Fallback: Store OTP in database (for development/testing)
+            const otp = generateOTP();
+            const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
+
+            await pool.query(
+                `INSERT INTO phone_otps (phone, otp, expires_at)
+                 VALUES ($1, $2, $3)`,
+                [phone, otp, expiresAt]
+            );
+
+            // Log OTP for development debugging only
+            devLog(`Phone OTP for ${formattedPhone}`, otp);
+
+            res.json({
+                message: "OTP sent to your phone"
+            });
+        }
+
+    } catch (err) {
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- VERIFY OTP -------------------------
+exports.verifyOtp = async (req, res) => {
+    try {
+        const { phone, otp, countryCode } = req.body;
+
+        if (!phone || !otp) {
+            return res.status(400).json({ error: "Phone and OTP are required" });
+        }
+
+        // Fetch user first
+        const userQuery = await pool.query(
+            "SELECT * FROM users WHERE phone = $1",
+            [phone]
+        );
+
+        if (userQuery.rows.length === 0) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        const user = userQuery.rows[0];
+
+        // Format phone number with country code
+        const formattedPhone = phone.startsWith('+') ? phone : `${countryCode || '+91'}${phone}`;
+
+        if (twilioClient && process.env.TWILIO_VERIFY_SERVICE_SID) {
+            // Use Twilio Verify API
+            try {
+                const verificationCheck = await twilioClient.verify.v2
+                    .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+                    .verificationChecks
+                    .create({ to: formattedPhone, code: otp });
+
+                if (verificationCheck.status !== 'approved') {
+                    return res.status(400).json({ error: "Invalid or expired OTP" });
+                }
+            } catch (twilioErr) {
+                console.error("Twilio verification error:", twilioErr.message);
+                return res.status(400).json({ 
+                    error: "Invalid or expired OTP", 
+                    details: twilioErr.message 
+                });
+            }
+        } else {
+            // Fallback: Check OTP from database
+            const otpCheck = await pool.query(
+                `SELECT * FROM phone_otps 
+                 WHERE phone = $1 AND otp = $2 
+                 ORDER BY created_at DESC LIMIT 1`,
+                [phone, otp]
+            );
+
+            if (otpCheck.rows.length === 0) {
+                return res.status(400).json({ error: "Invalid OTP" });
+            }
+
+            const otpRecord = otpCheck.rows[0];
+
+            if (new Date() > otpRecord.expires_at) {
+                return res.status(400).json({ error: "OTP expired" });
+            }
+
+            // Delete OTP after successful verification
+            await pool.query("DELETE FROM phone_otps WHERE phone = $1", [phone]);
+        }
+
+        // Generate tokens
+        const accessToken = generateAccessToken({
+            id: user.id,
+            email: user.email,
+            phone: user.phone,
+            firstname: user.firstname,
+            lastname: user.lastname,
+        });
+
+        const refreshToken = generateRefreshToken({ id: user.id });
+
+        await pool.query(
+            "INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)",
+            [user.id, refreshToken]
+        );
+
+        // Update last_login
+        await pool.query(
+            "UPDATE users SET last_login = NOW() WHERE id = $1",
+            [user.id]
+        );
+
+        res.json({
+            message: "OTP verified, login successful",
+            token: accessToken,
+            refreshToken,
+            user: mapUser(user)
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: "Server error", details: err.message });
     }
 };
 
@@ -316,20 +502,24 @@ exports.uploadProfilePhoto = async (req, res) => {
             return res.status(400).json({ error: "Photo file is required" });
         }
 
-        // Store file metadata in DB (filename, MIME type, size)
         const { filename, mimetype, size } = req.file;
 
+        // Build the full public URL
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const photoUrl = `${baseUrl}/uploads/${filename}`;
+
         const result = await pool.query(
-            `UPDATE users SET photo_filename = $1, photo_mimetype = $2, photo_size = $3, photo_updated_at = NOW() 
-             WHERE id = $4 RETURNING id, firstname, lastname, email, phone, photo_filename`,
-            [filename, mimetype, size, userId]
+            `UPDATE users 
+             SET photo_filename = $1, photo_url = $2, photo_mimetype = $3, photo_size = $4, photo_updated_at = NOW() 
+             WHERE id = $5
+             RETURNING id, firstname, lastname, email, phone, photo_url`,
+            [filename, photoUrl, mimetype, size, userId]
         );
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: "User not found" });
-        }
-
-        res.json({ message: "Profile photo uploaded successfully", user: result.rows[0] });
+        res.json({
+            message: "Profile photo uploaded successfully",
+            user: result.rows[0]
+        });
 
     } catch (err) {
         console.error("Upload photo error:", err);
@@ -408,26 +598,34 @@ exports.requestEmailVerification = async (req, res) => {
             return res.status(400).json({ error: "Email already in use" });
         }
 
-        // Generate verification token
-        const verificationToken = jwt.sign({ id: req.user.id, email }, process.env.JWT_SECRET, {
-            expiresIn: "1h"
-        });
+        // Generate 6-digit verification code (valid for ~1 hour via created_at)
+        const verificationCode = generateOTP();
 
-        // Store token in DB for verification
+        // Store code in DB for verification (no expiration needed - one-time use)
         await pool.query(
             `INSERT INTO email_verifications (user_id, email, token, created_at) 
              VALUES ($1, $2, $3, NOW()) 
-             ON CONFLICT (user_id) DO UPDATE SET token = $3, created_at = NOW()`,
-            [req.user.id, email, verificationToken]
+             ON CONFLICT (user_id) DO UPDATE SET 
+               token = $3, 
+               created_at = NOW()`,
+            [req.user.id, email, verificationCode]
         );
+        console.log(`Stored verification code in DB for user ${req.user.id}, email: ${email}`);
 
-        // TODO: Send email with verification link (using nodemailer or similar)
-        // const verifyLink = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+        // Send verification email with code (frontend expects 6-digit input)
+        const emailSent = await sendVerificationEmail(email, verificationCode);
+
+        if (!emailSent) {
+            return res.status(500).json({ 
+                error: "Failed to send verification email. Please try again later." 
+            });
+        }
+
+        // Log verification code for development debugging only
+        devLog(`Email verification code for ${email}`, verificationCode);
 
         res.json({
-            message: "Verification email sent (TODO: implement email sending)",
-            // In production, remove this token from response
-            verificationToken: process.env.NODE_ENV !== "production" ? verificationToken : undefined
+            message: "Verification code sent successfully. Please check your inbox."
         });
 
     } catch (err) {
@@ -439,28 +637,28 @@ exports.requestEmailVerification = async (req, res) => {
 // ---------------------- VERIFY NEW EMAIL -------------------------
 exports.verifyNewEmail = async (req, res) => {
     try {
-        const { token } = req.body;
+        const code = req.body.code || req.body.verificationCode || req.body.token || req.body.otp;
 
-        if (!token) {
-            return res.status(400).json({ error: "Verification token is required" });
+        if (!code) {
+            return res.status(400).json({ error: "Verification code is required" });
         }
 
-        // Verify token
-        let decoded;
-        try {
-            decoded = jwt.verify(token, process.env.JWT_SECRET);
-        } catch (err) {
-            return res.status(403).json({ error: "Invalid or expired verification token" });
+        // Require authenticated user (same as requestEmailVerification)
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ error: "Unauthorized" });
         }
 
-        // Check if token exists in DB
+        // Find and delete the verification code in one atomic operation
         const verification = await pool.query(
-            "SELECT * FROM email_verifications WHERE token = $1 AND user_id = $2",
-            [token, decoded.id]
+            `DELETE FROM email_verifications 
+             WHERE user_id = $1 AND token = $2 
+             RETURNING email`,
+            [userId, code]
         );
 
         if (verification.rows.length === 0) {
-            return res.status(403).json({ error: "Verification token not found or already used" });
+            return res.status(400).json({ error: "Invalid or expired verification code" });
         }
 
         const { email } = verification.rows[0];
@@ -468,13 +666,7 @@ exports.verifyNewEmail = async (req, res) => {
         // Update user email
         await pool.query(
             "UPDATE users SET email = $1, email_verified = true WHERE id = $2",
-            [email, decoded.id]
-        );
-
-        // Delete used token
-        await pool.query(
-            "DELETE FROM email_verifications WHERE token = $1",
-            [token]
+            [email, userId]
         );
 
         res.json({ message: "Email verified and updated successfully" });
