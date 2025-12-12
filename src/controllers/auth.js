@@ -4,6 +4,7 @@ const pool = require("../db");
 const { sendVerificationEmail } = require("../services/emailService");
 const { blacklistToken } = require("../services/tokenBlacklistService");
 const { sanitizeUser, devLog } = require("../utils/security");
+const { uploadToCloudinary, deleteFromCloudinary } = require("../services/cloudinaryService");
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -502,28 +503,75 @@ exports.uploadProfilePhoto = async (req, res) => {
             return res.status(400).json({ error: "Photo file is required" });
         }
 
-        const { filename, mimetype, size } = req.file;
+        // Validate file size
+        const maxSizeBytes = 5 * 1024 * 1024; // 5MB
+        if (req.file.size > maxSizeBytes) {
+            return res.status(400).json({
+                error: `File size exceeds 5MB limit. Current size: ${(req.file.size / 1024 / 1024).toFixed(2)}MB`
+            });
+        }
 
-        // Build the full public URL
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        const photoUrl = `${baseUrl}/uploads/${filename}`;
+        if (req.file.size < 10 * 1024) {
+            return res.status(400).json({
+                error: "File size must be at least 10KB"
+            });
+        }
 
+        // Get existing photo public ID if any (for deletion)
+        const userResult = await pool.query(
+            "SELECT photo_public_id FROM users WHERE id = $1",
+            [userId]
+        );
+        const oldPhotoPublicId = userResult.rows[0]?.photo_public_id;
+
+        // Upload to Cloudinary
+        const uploadResult = await uploadToCloudinary(
+            req.file.buffer,
+            `knost/profiles`,
+            `user-${userId}-profile`
+        );
+
+        // Delete old photo if exists
+        if (oldPhotoPublicId) {
+            try {
+                await deleteFromCloudinary(oldPhotoPublicId);
+            } catch (err) {
+                console.error("Failed to delete old photo:", err.message);
+                // Continue anyway, old photo will just remain in Cloudinary
+            }
+        }
+
+        // Update user with new photo URL
         const result = await pool.query(
             `UPDATE users 
-             SET photo_filename = $1, photo_url = $2, photo_mimetype = $3, photo_size = $4, photo_updated_at = NOW() 
+             SET photo_filename = $1, photo_url = $2, photo_public_id = $3, photo_size = $4, photo_updated_at = NOW() 
              WHERE id = $5
              RETURNING id, firstname, lastname, email, phone, photo_url`,
-            [filename, photoUrl, mimetype, size, userId]
+            [
+                `user-${userId}-profile`,
+                uploadResult.url,
+                uploadResult.publicId,
+                uploadResult.size,
+                userId
+            ]
         );
 
         res.json({
             message: "Profile photo uploaded successfully",
-            user: result.rows[0]
+            user: result.rows[0],
+            photo: {
+                url: uploadResult.url,
+                size: uploadResult.size,
+                uploadedAt: uploadResult.uploadedAt
+            }
         });
 
     } catch (err) {
         console.error("Upload photo error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({
+            error: "Failed to upload photo",
+            details: err.message
+        });
     }
 };
 
