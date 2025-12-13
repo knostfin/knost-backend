@@ -1,7 +1,7 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("../db");
-const { sendVerificationEmail } = require("../services/emailService");
+const { sendVerificationEmail, sendPasswordResetEmail } = require("../services/emailService");
 const { blacklistToken } = require("../services/tokenBlacklistService");
 const { sanitizeUser, devLog } = require("../utils/security");
 const { uploadToCloudinary, deleteFromCloudinary } = require("../services/cloudinaryService");
@@ -729,6 +729,125 @@ exports.verifyNewEmail = async (req, res) => {
 
     } catch (err) {
         console.error("Verify email error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- FORGOT PASSWORD -------------------------
+exports.forgotPassword = async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({ error: "Email is required" });
+        }
+
+        // Check if user exists
+        const userQuery = await pool.query(
+            "SELECT id, email, firstname FROM users WHERE email = $1",
+            [email]
+        );
+
+        if (userQuery.rows.length === 0) {
+            // Don't reveal if email exists (security best practice)
+            return res.json({ 
+                message: "If this email exists in our system, you will receive a password reset link" 
+            });
+        }
+
+        const user = userQuery.rows[0];
+
+        // Generate reset token
+        const resetToken = require('crypto').randomBytes(32).toString('hex');
+
+        // Delete any existing reset tokens for this user
+        await pool.query(
+            "DELETE FROM password_resets WHERE user_id = $1",
+            [user.id]
+        );
+
+        // Store reset token (expires in 1 hour)
+        await pool.query(
+            `INSERT INTO password_resets (user_id, email, token, expires_at)
+             VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')`,
+            [user.id, email, resetToken]
+        );
+
+        // Send email with reset link using proper email service
+        const emailSent = await sendPasswordResetEmail(email, resetToken);
+
+        if (!emailSent) {
+            return res.status(500).json({ 
+                error: "Failed to send password reset email. Please try again later." 
+            });
+        }
+
+        console.log(`✅ Password reset email sent to ${email}`);
+
+        res.json({ 
+            message: "If this email exists in our system, you will receive a password reset link" 
+        });
+
+    } catch (err) {
+        console.error("Forgot password error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- RESET PASSWORD -------------------------
+exports.resetPassword = async (req, res) => {
+    try {
+        const { token, email, newPassword, confirmPassword } = req.body;
+
+        if (!token || !email || !newPassword || !confirmPassword) {
+            return res.status(400).json({ error: "All fields are required" });
+        }
+
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({ error: "Passwords do not match" });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: "Password must be at least 6 characters long" });
+        }
+
+        // Find valid reset token
+        const resetQuery = await pool.query(
+            `SELECT * FROM password_resets 
+             WHERE token = $1 AND email = $2 AND expires_at > NOW()`,
+            [token, email]
+        );
+
+        if (resetQuery.rows.length === 0) {
+            return res.status(400).json({ 
+                error: "Invalid or expired reset token. Please request a new password reset." 
+            });
+        }
+
+        const resetRecord = resetQuery.rows[0];
+        const userId = resetRecord.user_id;
+
+        // Hash new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update user password
+        await pool.query(
+            "UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2",
+            [hashedPassword, userId]
+        );
+
+        // Delete used reset token
+        await pool.query(
+            "DELETE FROM password_resets WHERE id = $1",
+            [resetRecord.id]
+        );
+
+        console.log(`✅ Password reset successful for user ${userId}`);
+
+        res.json({ message: "Password reset successfully. You can now login with your new password." });
+
+    } catch (err) {
+        console.error("Reset password error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
     }
 };

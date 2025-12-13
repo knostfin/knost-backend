@@ -5,6 +5,7 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const path = require("path");
 const authRoutes = require("./routes/auth");
+const financeRoutes = require("./routes/finance");
 const errorHandler = require("./middlewares/errorHandler");
 const securityResponseChecker = require("./middlewares/securityMiddleware");
 const { startCleanupJob } = require("./services/tokenCleanupService");
@@ -82,6 +83,7 @@ app.use(securityResponseChecker);
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/finance", financeRoutes);
 
 // Error handler (should be last middleware)
 app.use(errorHandler);

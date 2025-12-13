@@ -60,7 +60,8 @@ async function sendVerificationEmail(email, code) {
  */
 async function sendPasswordResetEmail(email, resetToken) {
     try {
-        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+        // Frontend expects token in path and email as query param
+        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}?email=${encodeURIComponent(email)}`;
 
         const response = await resend.emails.send({
             from: 'noreply@knost.in',
