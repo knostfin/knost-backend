@@ -28,6 +28,7 @@ async function uploadToCloudinary(fileBuffer, folder, publicId) {
             public_id: publicId,
             resource_type: 'auto',
             overwrite: true,
+            invalidate: true,  // Clear CDN cache when overwriting
             quality: 'auto',
             fetch_format: 'auto'
         });
