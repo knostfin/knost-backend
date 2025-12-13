@@ -9,6 +9,35 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// Validate Cloudinary configuration
+if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+    console.warn('⚠️ WARNING: Cloudinary credentials not configured. Image uploads will fail.');
+    console.warn('Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in .env');
+} else {
+    console.log('✅ Cloudinary configured:', {
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+        apiKeyPrefix: process.env.CLOUDINARY_API_KEY?.substring(0, 4) + '...',
+        apiSecretPrefix: process.env.CLOUDINARY_API_SECRET?.substring(0, 4) + '...'
+    });
+}
+
+// Test Cloudinary credentials on startup
+async function testCloudinaryConnection() {
+    try {
+        const result = await cloudinary.api.ping();
+        console.log('✅ Cloudinary connection test successful:', result);
+        return true;
+    } catch (error) {
+        console.error('❌ Cloudinary connection test FAILED:', error.message);
+        console.error('Your Cloudinary credentials appear to be invalid!');
+        console.error('Please verify CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET');
+        return false;
+    }
+}
+
+// Run connection test
+testCloudinaryConnection();
+
 /**
  * Upload a file to Cloudinary
  * @param {Object} fileBuffer - File buffer from multer
@@ -17,10 +46,19 @@ cloudinary.config({
  * @returns {Promise<Object>} - Upload result with secure_url and public_id
  */
 async function uploadToCloudinary(fileBuffer, folder, publicId) {
+    let tempPath = null;
     try {
+        // Validate Cloudinary is configured
+        if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY) {
+            throw new Error('Cloudinary credentials not configured in environment variables');
+        }
+
         // Create a temporary file from buffer
-        const tempPath = path.join(__dirname, `../../temp_${Date.now()}_${publicId}`);
+        tempPath = path.join(__dirname, `../../temp_${Date.now()}_${publicId}`);
         fs.writeFileSync(tempPath, fileBuffer);
+
+        console.log(`🔄 Uploading to Cloudinary: ${folder}/${publicId}`);
+        console.log(`📝 Temp file created at: ${tempPath}`);
 
         // Upload to Cloudinary
         const result = await cloudinary.uploader.upload(tempPath, {
@@ -33,8 +71,17 @@ async function uploadToCloudinary(fileBuffer, folder, publicId) {
             fetch_format: 'auto'
         });
 
-        // Delete temporary file
-        fs.unlinkSync(tempPath);
+        console.log(`✅ Upload successful to Cloudinary:`, {
+            url: result.secure_url,
+            publicId: result.public_id,
+            size: result.bytes,
+            format: result.format
+        });
+
+        // Validate upload result
+        if (!result.secure_url) {
+            throw new Error('Cloudinary upload succeeded but no secure_url returned');
+        }
 
         return {
             success: true,
@@ -45,8 +92,19 @@ async function uploadToCloudinary(fileBuffer, folder, publicId) {
             uploadedAt: new Date(result.created_at)
         };
     } catch (error) {
-        console.error('Cloudinary upload error:', error);
+        console.error('❌ Cloudinary upload error:', error.message);
+        console.error('Stack:', error.stack);
         throw new Error(`Failed to upload file: ${error.message}`);
+    } finally {
+        // Clean up temp file in finally block to ensure it always runs
+        if (tempPath && fs.existsSync(tempPath)) {
+            try {
+                fs.unlinkSync(tempPath);
+                console.log(`🗑️ Temp file cleaned up: ${tempPath}`);
+            } catch (cleanupError) {
+                console.warn(`⚠️ Failed to clean up temp file ${tempPath}:`, cleanupError.message);
+            }
+        }
     }
 }
 

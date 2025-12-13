@@ -32,6 +32,14 @@ function generateOTP() {
 // Shape DB user row into response with both snake_case and camelCase keys
 function mapUser(row) {
     if (!row) return null;
+    
+    // Construct full Cloudinary URL if photo exists
+    let photoUrl = null;
+    if (row.photo_filename && row.photo_public_id) {
+        // Use the full Cloudinary URL pattern
+        photoUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${row.photo_public_id}.jpg`;
+    }
+    
     return {
         id: row.id,
         firstname: row.firstname,
@@ -41,7 +49,7 @@ function mapUser(row) {
         countryCode: row.country_code,
         createdAt: row.created_at,
         lastLogin: row.last_login,
-        photoFilename: row.photo_filename,
+        photoUrl: photoUrl,  // Return full URL instead of filename
     };
 }
 
