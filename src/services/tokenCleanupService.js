@@ -1,12 +1,29 @@
 const pool = require("../db");
 
 /**
+ * Warm up database connection (for Neon auto-suspend)
+ */
+async function warmUpDatabase() {
+    try {
+        await pool.query("SELECT 1");
+        console.log("✓ Database connection warmed up");
+        return true;
+    } catch (error) {
+        console.error("⚠️ Database warm-up failed:", error.message);
+        return false;
+    }
+}
+
+/**
  * Clean up expired refresh tokens from the database
  * This should be run periodically (e.g., daily via cron job or on server start)
  */
 async function cleanupExpiredRefreshTokens() {
     try {
         const jwt = require("jsonwebtoken");
+        
+        // Warm up DB connection first (important for Neon)
+        await warmUpDatabase();
         
         // Get all refresh tokens
         const result = await pool.query("SELECT id, token FROM refresh_tokens");
@@ -57,12 +74,26 @@ async function cleanupOldRefreshTokens(daysOld = 7) {
  * Runs cleanup every 24 hours
  */
 function startCleanupJob() {
-    // Run immediately on start
-    cleanupExpiredRefreshTokens().catch(console.error);
+    console.log("⏰ Token cleanup job scheduled (runs every 24 hours)");
+    
+    // Run first cleanup after 2 minutes (give DB time to warm up)
+    setTimeout(async () => {
+        try {
+            const deletedCount = await cleanupExpiredRefreshTokens();
+            console.log(`✓ Cleanup job completed: ${deletedCount} tokens deleted`);
+        } catch (error) {
+            console.error("⚠️ Cleanup job failed (will retry in 24h):", error.message);
+        }
+    }, 2 * 60 * 1000); // 2 minutes
     
     // Then run every 24 hours
-    setInterval(() => {
-        cleanupExpiredRefreshTokens().catch(console.error);
+    setInterval(async () => {
+        try {
+            const deletedCount = await cleanupExpiredRefreshTokens();
+            console.log(`✓ Cleanup job completed: ${deletedCount} tokens deleted`);
+        } catch (error) {
+            console.error("⚠️ Cleanup job failed (will retry in 24h):", error.message);
+        }
     }, 24 * 60 * 60 * 1000); // 24 hours
 }
 
@@ -70,4 +101,5 @@ module.exports = {
     cleanupExpiredRefreshTokens,
     cleanupOldRefreshTokens,
     startCleanupJob,
+    warmUpDatabase,
 };

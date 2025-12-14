@@ -20,9 +20,13 @@ const pool = new Pool({
 
   // 🔑 Neon + Render tuning
   max: 3,                         // VERY IMPORTANT
-  idleTimeoutMillis: 20_000,      // close idle connections
-  connectionTimeoutMillis: 2_000, // fail fast on cold start
+  idleTimeoutMillis: 60_000,      // close idle after 60s (Neon suspends after 5min)
+  connectionTimeoutMillis: 10_000,// 10s timeout for Neon cold starts
   allowExitOnIdle: true,          // prevents hanging workers
+  
+  // Neon-specific: Keep connection alive
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000
 });
 
 module.exports = pool;
