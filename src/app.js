@@ -27,6 +27,19 @@ app.get("/health", (req, res) => {
 });
 
 /* ------------------------------------------------------------------
+   1️⃣.1️⃣ ROBOTS.TXT (SEO REQUIREMENT)
+------------------------------------------------------------------- */
+app.get("/robots.txt", (req, res) => {
+  res.type("text/plain");
+  res.send(`User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /uploads/private/
+
+Sitemap: https://knost.in/sitemap.xml`);
+});
+
+/* ------------------------------------------------------------------
    2️⃣ TRUST PROXY (RENDER / CLOUDFLARE)
 ------------------------------------------------------------------- */
 app.set("trust proxy", 1);
@@ -37,9 +50,15 @@ app.set("trust proxy", 1);
 setTimeout(startCleanupJob, 30_000);
 
 /* ------------------------------------------------------------------
-   4️⃣ STATIC FILES
+   4️⃣ STATIC FILES (WITH CACHING)
 ------------------------------------------------------------------- */
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "../uploads"), {
+    maxAge: "1y", // Cache uploaded files for 1 year
+    immutable: true,
+  })
+);
 
 /* ------------------------------------------------------------------
    5️⃣ CORS (FAST + SAFE)
@@ -102,6 +121,19 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
    9️⃣ BODY PARSER
 ------------------------------------------------------------------- */
 app.use(express.json());
+
+/* ------------------------------------------------------------------
+   9️⃣.1️⃣ API CACHE-CONTROL HEADERS (PERFORMANCE)
+------------------------------------------------------------------- */
+app.use((req, res, next) => {
+  // Don't cache API responses by default for security and freshness
+  if (req.path.startsWith("/api/")) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+  }
+  next();
+});
 
 /* ------------------------------------------------------------------
    🔟 SECURITY RESPONSE CHECKER (DEV ONLY, SKIPS /health)
