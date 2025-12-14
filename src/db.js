@@ -1,25 +1,28 @@
 const { Pool } = require("pg");
 require("dotenv").config();
 
-// Determine SSL setting: enable if DATABASE_SSL=true or if host suggests cloud provider
 const host = process.env.DATABASE_HOST || "";
+
 const useSSL =
   process.env.DATABASE_SSL === "true" ||
-  host.includes("render.com") ||
-  host.includes("railway.app") ||
-  host.includes("postgres.render.com") ||
-  host.includes(".cloud.") ||
   host.includes("neon.tech") ||
-  host.includes("supabase");
+  host.includes("supabase") ||
+  host.includes("render.com");
 
 const pool = new Pool({
   user: process.env.DATABASE_USERNAME,
   password: process.env.DATABASE_PASSWORD,
   host: process.env.DATABASE_HOST,
   database: process.env.DATABASE,
-  port: process.env.DATABASE_PORT,
-  // Use SSL for cloud databases; disable for localhost
+  port: Number(process.env.DATABASE_PORT || 5432),
+
   ssl: useSSL ? { rejectUnauthorized: false } : false,
+
+  // 🔑 Neon + Render tuning
+  max: 3,                         // VERY IMPORTANT
+  idleTimeoutMillis: 20_000,      // close idle connections
+  connectionTimeoutMillis: 2_000, // fail fast on cold start
+  allowExitOnIdle: true,          // prevents hanging workers
 });
 
 module.exports = pool;

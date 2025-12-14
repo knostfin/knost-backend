@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const pool = require("./db");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
@@ -112,6 +113,14 @@ app.use(securityResponseChecker);
 ------------------------------------------------------------------- */
 app.use("/api/auth", authRoutes);
 app.use("/api/finance", financeRoutes);
+
+// -----------------------------
+// Neon DB warm-up (run every 1 hour)
+// -----------------------------
+setInterval(() => {
+   pool.query("SELECT 1").catch(() => {});
+}, 60 * 60 * 1000); // 1 hour
+
 
 /* ------------------------------------------------------------------
    1️⃣2️⃣ ERROR HANDLER (LAST)
