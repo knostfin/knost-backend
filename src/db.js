@@ -1,32 +1,28 @@
 const { Pool } = require("pg");
 require("dotenv").config();
 
-const host = process.env.DATABASE_HOST || "";
-
-const useSSL =
-  process.env.DATABASE_SSL === "true" ||
-  host.includes("neon.tech") ||
-  host.includes("supabase") ||
-  host.includes("render.com");
-
 const pool = new Pool({
   user: process.env.DATABASE_USERNAME,
   password: process.env.DATABASE_PASSWORD,
   host: process.env.DATABASE_HOST,
   database: process.env.DATABASE,
-  port: Number(process.env.DATABASE_PORT || 5432),
+  port: Number(process.env.DATABASE_PORT),
 
-  ssl: useSSL ? { rejectUnauthorized: false } : false,
+  ssl: { rejectUnauthorized: false },
 
-  // 🔑 Neon + Render tuning
-  max: 3,                         // VERY IMPORTANT
-  idleTimeoutMillis: 60_000,      // close idle after 60s (Neon suspends after 5min)
-  connectionTimeoutMillis: 10_000,// 10s timeout for Neon cold starts
-  allowExitOnIdle: true,          // prevents hanging workers
-  
-  // Neon-specific: Keep connection alive
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 10_000
+  // Supabase + Render safe defaults
+  max: 10,                     // pooler handles real pooling
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000
+});
+
+pool.on("connect", (client) => {
+  client.query(`SET search_path TO ${process.env.DATABASE_SCHEMA}, public`);
+});
+
+pool.on("error", (err) => {
+  console.error("❌ Unexpected PG error", err);
+  process.exit(1);
 });
 
 module.exports = pool;
