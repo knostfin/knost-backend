@@ -6,6 +6,11 @@ const { checkForSensitiveData } = require('../utils/security');
  * Skips legitimate endpoints that are supposed to return tokens
  */
 function securityResponseChecker(req, res, next) {
+
+    if (req.path === '/health') {
+        return next();
+    }
+    
     if (process.env.NODE_ENV === "production") {
         return next();
     }

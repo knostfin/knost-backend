@@ -22,6 +22,4 @@ const pool = new Pool({
   ssl: useSSL ? { rejectUnauthorized: false } : false,
 });
 
-console.log(`[DB] Connecting to ${host} with SSL=${useSSL}`);
-
 module.exports = pool;
