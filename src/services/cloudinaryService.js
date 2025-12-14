@@ -11,24 +11,17 @@ cloudinary.config({
 
 // Validate Cloudinary configuration
 if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-    console.warn('⚠️ WARNING: Cloudinary credentials not configured. Image uploads will fail.');
+    console.warn('WARNING: Cloudinary credentials not configured. Image uploads will fail.');
     console.warn('Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in .env');
-} else {
-    console.log('✅ Cloudinary configured:', {
-        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-        apiKeyPrefix: process.env.CLOUDINARY_API_KEY?.substring(0, 4) + '...',
-        apiSecretPrefix: process.env.CLOUDINARY_API_SECRET?.substring(0, 4) + '...'
-    });
 }
 
 // Test Cloudinary credentials on startup
 async function testCloudinaryConnection() {
     try {
         const result = await cloudinary.api.ping();
-        console.log('✅ Cloudinary connection test successful:', result);
         return true;
     } catch (error) {
-        console.error('❌ Cloudinary connection test FAILED:', error.message);
+        console.error('Cloudinary connection test FAILED:', error.message);
         console.error('Your Cloudinary credentials appear to be invalid!');
         console.error('Please verify CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET');
         return false;
@@ -100,7 +93,6 @@ async function uploadToCloudinary(fileBuffer, folder, publicId) {
         if (tempPath && fs.existsSync(tempPath)) {
             try {
                 fs.unlinkSync(tempPath);
-                console.log(`🗑️ Temp file cleaned up: ${tempPath}`);
             } catch (cleanupError) {
                 console.warn(`⚠️ Failed to clean up temp file ${tempPath}:`, cleanupError.message);
             }

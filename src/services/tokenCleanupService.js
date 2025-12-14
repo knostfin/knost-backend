@@ -25,7 +25,6 @@ async function cleanupExpiredRefreshTokens() {
             }
         }
         
-        console.log(`✓ Cleaned up ${deletedCount} expired refresh tokens`);
         return deletedCount;
     } catch (error) {
         console.error("Error cleaning up expired refresh tokens:", error);
@@ -65,8 +64,6 @@ function startCleanupJob() {
     setInterval(() => {
         cleanupExpiredRefreshTokens().catch(console.error);
     }, 24 * 60 * 60 * 1000); // 24 hours
-    
-    console.log("✓ Refresh token cleanup job started (runs daily)");
 }
 
 module.exports = {

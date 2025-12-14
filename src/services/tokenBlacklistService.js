@@ -20,7 +20,6 @@ if (process.env.REDIS_HOST || process.env.REDIS_ENABLED === "true") {
 
         redisClient.on("connect", () => {
             useRedis = true;
-            console.log("✓ Redis connected for token blacklist");
         });
 
         redisClient.on("error", (err) => {

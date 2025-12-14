@@ -1,9 +1,11 @@
 const express = require("express");
 const cors = require("cors");
+const pool = require("./db");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const path = require("path");
+
 const authRoutes = require("./routes/auth");
 const financeRoutes = require("./routes/finance");
 const errorHandler = require("./middlewares/errorHandler");
@@ -12,80 +14,117 @@ const { startCleanupJob } = require("./services/tokenCleanupService");
 
 const app = express();
 
-// Start token cleanup job
-startCleanupJob();
+/* ------------------------------------------------------------------
+   1️⃣ HEALTH CHECK (MUST BE FIRST & FAST)
+------------------------------------------------------------------- */
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "knost-backend",
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  });
+});
 
-// Trust proxy (required for rate limiting behind proxies like Render)
+/* ------------------------------------------------------------------
+   2️⃣ TRUST PROXY (RENDER / CLOUDFLARE)
+------------------------------------------------------------------- */
 app.set("trust proxy", 1);
 
-// Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+/* ------------------------------------------------------------------
+   3️⃣ START BACKGROUND JOB (DELAYED TO REDUCE COLD START)
+------------------------------------------------------------------- */
+setTimeout(startCleanupJob, 30_000);
 
-// CORS - MUST be before rate limiting to handle OPTIONS preflight
-// Dynamically build allowed origins based on environment
-const getAllowedOrigins = () => {
-  const origins = [
-    "https://knost.in",
-    "https://www.knost.in",
-  ];
+/* ------------------------------------------------------------------
+   4️⃣ STATIC FILES
+------------------------------------------------------------------- */
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
-  // Add development origins
-  if (process.env.NODE_ENV !== "production") {
-    origins.push(
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://127.0.0.1:3000",
-      "http://127.0.0.1:5173"
-    );
-  }
+/* ------------------------------------------------------------------
+   5️⃣ CORS (FAST + SAFE)
+------------------------------------------------------------------- */
+const ALLOWED_ORIGINS = [
+  "https://knost.in",
+  "https://www.knost.in",
+  "https://dev.knost.in",
 
-  // Add dev domain if configured
-  if (process.env.DOMAIN) {
-    origins.push(`https://${process.env.DOMAIN}`);
-    origins.push(`https://www.${process.env.DOMAIN}`);
-  }
-
-  return origins;
-};
+  // Local development
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
 
 app.use(
   cors({
-    origin: getAllowedOrigins(),
+    origin: (origin, callback) => {
+      // Allow server-to-server, curl, health checks
+      if (!origin) return callback(null, true);
+
+      if (ALLOWED_ORIGINS.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "Pragma"],
+    allowedHeaders: ["Content-Type", "Authorization", "cache-control", "pragma"],
     credentials: true,
+    maxAge: 86400, // Cache preflight for 24 hours
   })
 );
 
-// Security headers (disabled in development to avoid CORS issues)
+/* ------------------------------------------------------------------
+   6️⃣ SECURITY HEADERS
+------------------------------------------------------------------- */
 if (process.env.NODE_ENV === "production") {
   app.use(helmet());
 }
 
-// Basic rate limiting (relaxed for development, skip OPTIONS)
+/* ------------------------------------------------------------------
+   7️⃣ RATE LIMITING (SKIP OPTIONS & HEALTH)
+------------------------------------------------------------------- */
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === "production" ? 100 : 1000, // Higher limit for dev
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === "production" ? 100 : 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method === "OPTIONS", // Skip preflight requests
+  skip: (req) =>
+    req.method === "OPTIONS" || req.path === "/health",
 });
 app.use(limiter);
 
-// Logging
+/* ------------------------------------------------------------------
+   8️⃣ LOGGING
+------------------------------------------------------------------- */
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
+/* ------------------------------------------------------------------
+   9️⃣ BODY PARSER
+------------------------------------------------------------------- */
 app.use(express.json());
 
-// Security response checker (development only)
+/* ------------------------------------------------------------------
+   🔟 SECURITY RESPONSE CHECKER (DEV ONLY, SKIPS /health)
+------------------------------------------------------------------- */
 app.use(securityResponseChecker);
 
-// Routes
+/* ------------------------------------------------------------------
+   1️⃣1️⃣ ROUTES
+------------------------------------------------------------------- */
 app.use("/api/auth", authRoutes);
 app.use("/api/finance", financeRoutes);
 
-// Error handler (should be last middleware)
+// -----------------------------
+// Neon DB warm-up (run every 1 hour)
+// -----------------------------
+setInterval(() => {
+   pool.query("SELECT 1").catch(() => {});
+}, 60 * 60 * 1000); // 1 hour
+
+
+/* ------------------------------------------------------------------
+   1️⃣2️⃣ ERROR HANDLER (LAST)
+------------------------------------------------------------------- */
 app.use(errorHandler);
 
 module.exports = app;
