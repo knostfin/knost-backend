@@ -1,0 +1,184 @@
+const pool = require("../db");
+
+// ---------------------- ADD INCOME -------------------------
+exports.addIncome = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { source, amount, description, month_year, received_on } = req.body;
+
+        // Validation
+        if (!source || !amount || amount <= 0) {
+            return res.status(400).json({ error: "Source and valid amount are required" });
+        }
+
+        if (!month_year || !/^\d{4}-\d{2}$/.test(month_year)) {
+            return res.status(400).json({ error: "Invalid month_year format. Use YYYY-MM" });
+        }
+
+        const receivedDate = received_on || `${month_year}-01`;
+
+        const result = await pool.query(
+            `INSERT INTO income (user_id, source, amount, description, month_year, received_on)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING *`,
+            [userId, source, amount, description || null, month_year, receivedDate]
+        );
+
+        res.status(201).json({
+            message: "Income added successfully",
+            income: result.rows[0]
+        });
+    } catch (err) {
+        console.error("Add income error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- GET INCOME -------------------------
+exports.getIncome = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { month_year, start_month, end_month } = req.query;
+
+        let query = "SELECT * FROM income WHERE user_id = $1";
+        const params = [userId];
+        let paramCount = 1;
+
+        if (month_year) {
+            // Get income for specific month
+            paramCount++;
+            query += ` AND month_year = $${paramCount}`;
+            params.push(month_year);
+        } else if (start_month && end_month) {
+            // Get income for date range
+            paramCount++;
+            query += ` AND month_year >= $${paramCount}`;
+            params.push(start_month);
+            
+            paramCount++;
+            query += ` AND month_year <= $${paramCount}`;
+            params.push(end_month);
+        }
+
+        query += " ORDER BY received_on DESC, created_at DESC";
+
+        const result = await pool.query(query, params);
+
+        // Calculate summary
+        const summary = {
+            total_income: result.rows.reduce((sum, i) => sum + parseFloat(i.amount), 0),
+            count: result.rows.length
+        };
+
+        res.json({ 
+            income: result.rows,
+            summary: summary
+        });
+    } catch (err) {
+        console.error("Get income error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- GET INCOME DETAILS -------------------------
+exports.getIncomeDetails = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        const result = await pool.query(
+            "SELECT * FROM income WHERE id = $1 AND user_id = $2",
+            [id, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Income not found" });
+        }
+
+        res.json({ income: result.rows[0] });
+    } catch (err) {
+        console.error("Get income details error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- UPDATE INCOME -------------------------
+exports.updateIncome = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+        const { source, amount, description, received_on } = req.body;
+
+        // Check ownership
+        const checkQuery = await pool.query(
+            "SELECT * FROM income WHERE id = $1 AND user_id = $2",
+            [id, userId]
+        );
+
+        if (checkQuery.rows.length === 0) {
+            return res.status(404).json({ error: "Income not found" });
+        }
+
+        const result = await pool.query(
+            `UPDATE income 
+             SET source = COALESCE($1, source),
+                 amount = COALESCE($2, amount),
+                 description = COALESCE($3, description),
+                 received_on = COALESCE($4, received_on),
+                 updated_at = NOW()
+             WHERE id = $5 AND user_id = $6
+             RETURNING *`,
+            [source, amount, description, received_on, id, userId]
+        );
+
+        res.json({
+            message: "Income updated successfully",
+            income: result.rows[0]
+        });
+    } catch (err) {
+        console.error("Update income error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- DELETE INCOME -------------------------
+exports.deleteIncome = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        const result = await pool.query(
+            "DELETE FROM income WHERE id = $1 AND user_id = $2 RETURNING *",
+            [id, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Income not found" });
+        }
+
+        res.json({ message: "Income deleted successfully" });
+    } catch (err) {
+        console.error("Delete income error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};
+
+// ---------------------- GET INCOME SOURCES -------------------------
+exports.getIncomeSources = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Get unique income sources
+        const result = await pool.query(
+            `SELECT DISTINCT source FROM income 
+             WHERE user_id = $1 
+             ORDER BY source ASC`,
+            [userId]
+        );
+
+        res.json({ sources: result.rows.map(r => r.source) });
+    } catch (err) {
+        console.error("Get income sources error:", err);
+        res.status(500).json({ error: "Server error", details: err.message });
+    }
+};

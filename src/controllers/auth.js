@@ -5,6 +5,7 @@ const { sendVerificationEmail, sendPasswordResetEmail } = require("../services/e
 const { blacklistToken } = require("../services/tokenBlacklistService");
 const { sanitizeUser, devLog } = require("../utils/security");
 const { uploadToCloudinary, deleteFromCloudinary } = require("../services/cloudinaryService");
+const { validatePhoneNumber, formatPhoneFromParts } = require("../utils/phoneValidator");
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -45,8 +46,7 @@ function mapUser(row) {
         firstname: row.firstname,
         lastname: row.lastname,
         email: row.email,
-        phone: row.phone,
-        countryCode: row.country_code,
+        phone: row.phone,  // Combined format: +{countrycode}{number}
         createdAt: row.created_at,
         lastLogin: row.last_login,
         photoUrl: photoUrl,  // Return full URL instead of filename
@@ -59,8 +59,12 @@ exports.register = async (req, res) => {
         const { firstname, lastname, email, password, phone, countryCode } = req.body;
 
         // Validation
-        if (!firstname || !lastname || !email || !password || !phone) {
+        if (!firstname || !lastname || !email || !password) {
             return res.status(400).json({ error: "All fields are required" });
+        }
+
+        if (!phone && !countryCode) {
+            return res.status(400).json({ error: "Phone number with country code is required" });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -72,12 +76,32 @@ exports.register = async (req, res) => {
             return res.status(400).json({ error: "Password must be at least 6 characters long" });
         }
 
+        // Format and validate phone number
+        let formattedPhone;
+        let phoneValidation;
+        
+        // Check if phone is already in combined format (+{countrycode}{number})
+        if (phone && phone.startsWith('+')) {
+            phoneValidation = validatePhoneNumber(phone);
+            if (!phoneValidation.valid) {
+                return res.status(400).json({ error: phoneValidation.error });
+            }
+            formattedPhone = phoneValidation.formatted;
+        } else {
+            // Phone parts provided separately
+            phoneValidation = formatPhoneFromParts(countryCode, phone);
+            if (!phoneValidation.valid) {
+                return res.status(400).json({ error: phoneValidation.error });
+            }
+            formattedPhone = phoneValidation.formatted;
+        }
+
         const findUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
         if (findUser.rows.length > 0) {
             return res.status(400).json({ error: "Email already exists" });
         }
 
-        const findPhone = await pool.query("SELECT * FROM users WHERE phone = $1", [phone]);
+        const findPhone = await pool.query("SELECT * FROM users WHERE phone = $1", [formattedPhone]);
         if (findPhone.rows.length > 0) {
             return res.status(400).json({ error: "Phone number already exists" });
         }
@@ -85,10 +109,10 @@ exports.register = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newUser = await pool.query(
-            `INSERT INTO users (firstname, lastname, email, password, phone, country_code)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id, firstname, lastname, email, phone, country_code, created_at, last_login`,
-            [firstname, lastname, email, hashedPassword, phone, countryCode || null]
+            `INSERT INTO users (firstname, lastname, email, password, phone)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id, firstname, lastname, email, phone, created_at, last_login`,
+            [firstname, lastname, email, hashedPassword, formattedPhone]
         );
 
         res.status(201).json({
@@ -142,12 +166,11 @@ exports.login = async (req, res) => {
 
         // Update last_login
         const updatedMeta = await pool.query(
-            "UPDATE users SET last_login = NOW() WHERE id = $1 RETURNING last_login, country_code, created_at",
+            "UPDATE users SET last_login = NOW() WHERE id = $1 RETURNING last_login, created_at",
             [user.id]
         );
         if (updatedMeta.rows[0]) {
             user.last_login = updatedMeta.rows[0].last_login;
-            user.country_code = updatedMeta.rows[0].country_code ?? user.country_code;
             user.created_at = updatedMeta.rows[0].created_at ?? user.created_at;
         }
 
@@ -270,19 +293,39 @@ exports.requestOtp = async (req, res) => {
     try {
         const { phone, countryCode } = req.body;
 
-        if (!phone) {
+        if (!phone && !countryCode) {
             return res.status(400).json({ error: "Phone number is required" });
         }
 
+        // Format and validate phone number
+        let formattedPhone;
+        let phoneValidation;
+        
+        // Check if phone is already in combined format
+        if (phone && phone.startsWith('+')) {
+            phoneValidation = validatePhoneNumber(phone);
+            if (!phoneValidation.valid) {
+                return res.status(400).json({ error: phoneValidation.error });
+            }
+            formattedPhone = phoneValidation.formatted;
+        } else {
+            // Phone parts provided separately
+            phoneValidation = formatPhoneFromParts(countryCode, phone);
+            if (!phoneValidation.valid) {
+                return res.status(400).json({ error: phoneValidation.error });
+            }
+            formattedPhone = phoneValidation.formatted;
+        }
+
         // Check if user exists
-        const userQuery = await pool.query("SELECT * FROM users WHERE phone = $1", [phone]);
+        const userQuery = await pool.query("SELECT * FROM users WHERE phone = $1", [formattedPhone]);
 
         if (userQuery.rows.length === 0) {
             return res.status(404).json({ error: "Phone number not registered" });
         }
 
         // Format phone number with country code (required for Twilio)
-        const formattedPhone = phone.startsWith('+') ? phone : `${countryCode || '+91'}${phone}`;
+        const formattedPhoneForTwilio = formattedPhone.startsWith('+') ? formattedPhone : `+${formattedPhone}`;
 
         if (twilioClient && process.env.TWILIO_VERIFY_SERVICE_SID) {
             // Use Twilio Verify API
@@ -290,7 +333,7 @@ exports.requestOtp = async (req, res) => {
                 const verification = await twilioClient.verify.v2
                     .services(process.env.TWILIO_VERIFY_SERVICE_SID)
                     .verifications
-                    .create({ to: formattedPhone, channel: 'sms' });
+                    .create({ to: formattedPhoneForTwilio, channel: 'sms' });
 
                 res.json({
                     message: "OTP sent to your phone",
@@ -311,7 +354,7 @@ exports.requestOtp = async (req, res) => {
             await pool.query(
                 `INSERT INTO phone_otps (phone, otp, expires_at)
                  VALUES ($1, $2, $3)`,
-                [phone, otp, expiresAt]
+                [formattedPhone, otp, expiresAt]
             );
 
             // Log OTP for development debugging only
@@ -332,14 +375,38 @@ exports.verifyOtp = async (req, res) => {
     try {
         const { phone, otp, countryCode } = req.body;
 
-        if (!phone || !otp) {
-            return res.status(400).json({ error: "Phone and OTP are required" });
+        if (!phone && !countryCode) {
+            return res.status(400).json({ error: "Phone number is required" });
+        }
+
+        if (!otp) {
+            return res.status(400).json({ error: "OTP is required" });
+        }
+
+        // Format and validate phone number
+        let formattedPhone;
+        let phoneValidation;
+        
+        // Check if phone is already in combined format
+        if (phone && phone.startsWith('+')) {
+            phoneValidation = validatePhoneNumber(phone);
+            if (!phoneValidation.valid) {
+                return res.status(400).json({ error: phoneValidation.error });
+            }
+            formattedPhone = phoneValidation.formatted;
+        } else {
+            // Phone parts provided separately
+            phoneValidation = formatPhoneFromParts(countryCode, phone);
+            if (!phoneValidation.valid) {
+                return res.status(400).json({ error: phoneValidation.error });
+            }
+            formattedPhone = phoneValidation.formatted;
         }
 
         // Fetch user first
         const userQuery = await pool.query(
             "SELECT * FROM users WHERE phone = $1",
-            [phone]
+            [formattedPhone]
         );
 
         if (userQuery.rows.length === 0) {
@@ -349,7 +416,7 @@ exports.verifyOtp = async (req, res) => {
         const user = userQuery.rows[0];
 
         // Format phone number with country code
-        const formattedPhone = phone.startsWith('+') ? phone : `${countryCode || '+91'}${phone}`;
+        const formattedPhoneForTwilio = formattedPhone.startsWith('+') ? formattedPhone : `+${formattedPhone}`;
 
         if (twilioClient && process.env.TWILIO_VERIFY_SERVICE_SID) {
             // Use Twilio Verify API
@@ -357,7 +424,7 @@ exports.verifyOtp = async (req, res) => {
                 const verificationCheck = await twilioClient.verify.v2
                     .services(process.env.TWILIO_VERIFY_SERVICE_SID)
                     .verificationChecks
-                    .create({ to: formattedPhone, code: otp });
+                    .create({ to: formattedPhoneForTwilio, code: otp });
 
                 if (verificationCheck.status !== 'approved') {
                     return res.status(400).json({ error: "Invalid or expired OTP" });
@@ -375,7 +442,7 @@ exports.verifyOtp = async (req, res) => {
                 `SELECT * FROM phone_otps 
                  WHERE phone = $1 AND otp = $2 
                  ORDER BY created_at DESC LIMIT 1`,
-                [phone, otp]
+                [formattedPhone, otp]
             );
 
             if (otpCheck.rows.length === 0) {
@@ -389,7 +456,7 @@ exports.verifyOtp = async (req, res) => {
             }
 
             // Delete OTP after successful verification
-            await pool.query("DELETE FROM phone_otps WHERE phone = $1", [phone]);
+            await pool.query("DELETE FROM phone_otps WHERE phone = $1", [formattedPhone]);
         }
 
         // Generate tokens
@@ -456,10 +523,10 @@ exports.getProfile = async (req, res) => {
 exports.updateProfile = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { firstname, lastname, phone } = req.body;
+        const { firstname, lastname, phone, countryCode } = req.body;
 
         // At least one field required
-        if (!firstname && !lastname && !phone) {
+        if (!firstname && !lastname && !phone && !countryCode) {
             return res.status(400).json({ error: "At least one field is required" });
         }
 
@@ -476,9 +543,41 @@ exports.updateProfile = async (req, res) => {
             updates.push(`lastname = $${paramCount++}`);
             values.push(lastname);
         }
-        if (phone) {
-            updates.push(`phone = $${paramCount++}`);
-            values.push(phone);
+
+        // Handle phone number formatting
+        if (phone || countryCode) {
+            let formattedPhone;
+            
+            // If phone is provided in combined format
+            if (phone && phone.startsWith('+')) {
+                const phoneValidation = validatePhoneNumber(phone);
+                if (!phoneValidation.valid) {
+                    return res.status(400).json({ error: phoneValidation.error });
+                }
+                formattedPhone = phoneValidation.formatted;
+            } else if (phone || countryCode) {
+                // Format from parts
+                const phoneValidation = formatPhoneFromParts(countryCode, phone);
+                if (!phoneValidation.valid) {
+                    return res.status(400).json({ error: phoneValidation.error });
+                }
+                formattedPhone = phoneValidation.formatted;
+            }
+
+            // Check if new phone already exists (for other users)
+            if (formattedPhone) {
+                const existingPhone = await pool.query(
+                    "SELECT id FROM users WHERE phone = $1 AND id != $2",
+                    [formattedPhone, userId]
+                );
+
+                if (existingPhone.rows.length > 0) {
+                    return res.status(400).json({ error: "Phone number already in use" });
+                }
+
+                updates.push(`phone = $${paramCount++}`);
+                values.push(formattedPhone);
+            }
         }
 
         values.push(userId);
