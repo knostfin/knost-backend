@@ -220,7 +220,8 @@ exports.getMonthlyExpenses = async (req, res) => {
 
         if (month_year) {
             paramCount++;
-            query += ` AND month_year = $${paramCount}`;
+            // Guard against legacy rows whose month_year was saved incorrectly by also checking due_date month
+            query += ` AND (month_year = $${paramCount} OR TO_CHAR(due_date, 'YYYY-MM') = $${paramCount})`;
             params.push(month_year);
         }
 
@@ -269,13 +270,20 @@ exports.addMonthlyExpense = async (req, res) => {
             return res.status(400).json({ error: "Invalid month_year format. Use YYYY-MM" });
         }
 
+        if (due_date && !/^\d{4}-\d{2}-\d{2}$/.test(due_date)) {
+            return res.status(400).json({ error: "Invalid due_date format. Use YYYY-MM-DD" });
+        }
+
+        const normalizedDueDate = due_date || `${month_year}-01`;
+        const normalizedMonthYear = normalizedDueDate.slice(0, 7);
+
         const result = await pool.query(
             `INSERT INTO monthly_expenses 
              (user_id, category, amount, description, payment_method, month_year, due_date, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
              RETURNING *`,
             [userId, category, amount, description || null, payment_method || 'cash', 
-             month_year, due_date || `${month_year}-01`]
+             normalizedMonthYear, normalizedDueDate]
         );
 
         res.status(201).json({
@@ -305,17 +313,32 @@ exports.updateMonthlyExpense = async (req, res) => {
             return res.status(404).json({ error: "Monthly expense not found" });
         }
 
+        const toMonthYear = (value) => {
+            if (!value) return null;
+            if (typeof value === 'string') return value.slice(0, 7);
+            try { return value.toISOString().slice(0, 7); } catch (e) { return null; }
+        };
+
+        const existing = checkQuery.rows[0];
+        const nextDueDate = due_date || existing.due_date;
+        const nextMonthYear = toMonthYear(due_date) || toMonthYear(existing.due_date) || existing.month_year;
+
+        if (due_date && !/^\d{4}-\d{2}-\d{2}$/.test(due_date)) {
+            return res.status(400).json({ error: "Invalid due_date format. Use YYYY-MM-DD" });
+        }
+
         const result = await pool.query(
             `UPDATE monthly_expenses 
              SET category = COALESCE($1, category),
                  amount = COALESCE($2, amount),
                  description = COALESCE($3, description),
                  payment_method = COALESCE($4, payment_method),
-                 due_date = COALESCE($5, due_date),
+                 due_date = $5,
+                 month_year = $6,
                  updated_at = NOW()
-             WHERE id = $6 AND user_id = $7
+             WHERE id = $7 AND user_id = $8
              RETURNING *`,
-            [category, amount, description, payment_method, due_date, id, userId]
+            [category, amount, description, payment_method, nextDueDate, nextMonthYear, id, userId]
         );
 
         res.json({
