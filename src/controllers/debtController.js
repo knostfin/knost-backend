@@ -4,11 +4,17 @@ const pool = require("../db");
 exports.addDebt = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { debt_name, total_amount, creditor, due_date, notes } = req.body;
+        let { debt_name, total_amount, creditor, due_date, notes } = req.body;
+
+        // ⚠️ CRITICAL: Convert string numbers to proper decimals
+        total_amount = parseFloat(total_amount);
 
         // Validation
-        if (!debt_name || !total_amount || total_amount <= 0) {
-            return res.status(400).json({ error: "Debt name and valid amount are required" });
+        if (!debt_name || isNaN(total_amount) || total_amount <= 0) {
+            return res.status(400).json({ 
+                error: "Debt name and valid amount are required",
+                debug: { total_amount, type: typeof total_amount }
+            });
         }
 
         const result = await pool.query(
@@ -18,9 +24,10 @@ exports.addDebt = async (req, res) => {
             [userId, debt_name, total_amount, creditor || null, due_date || null, notes || null]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.status(201).json({
             message: "Debt added successfully",
-            debt: result.rows[0]
+            debt: formatted
         });
     } catch (err) {
         console.error("Add debt error:", err);
@@ -45,8 +52,9 @@ exports.getDebts = async (req, res) => {
         query += " ORDER BY due_date ASC NULLS LAST, created_at DESC";
 
         const result = await pool.query(query, params);
+        const formatted = pool.formatRows(result.rows);
 
-        res.json({ debts: result.rows });
+        res.json({ debts: formatted });
     } catch (err) {
         console.error("Get debts error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
@@ -58,17 +66,23 @@ exports.getDebtDetails = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
+        const debtId = parseInt(id, 10);
+
+        if (Number.isNaN(debtId)) {
+            return res.status(400).json({ error: "Invalid debt id" });
+        }
 
         const result = await pool.query(
             "SELECT * FROM debts WHERE id = $1 AND user_id = $2",
-            [id, userId]
+            [debtId, userId]
         );
 
         if (result.rows.length === 0) {
             return res.status(404).json({ error: "Debt not found" });
         }
 
-        res.json({ debt: result.rows[0] });
+        const formatted = pool.formatRows([result.rows[0]])[0];
+        res.json({ debt: formatted });
     } catch (err) {
         console.error("Get debt details error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
@@ -80,12 +94,17 @@ exports.updateDebt = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
+        const debtId = parseInt(id, 10);
         const { debt_name, total_amount, creditor, due_date, notes } = req.body;
+
+        if (Number.isNaN(debtId)) {
+            return res.status(400).json({ error: "Invalid debt id" });
+        }
 
         // Check ownership
         const checkQuery = await pool.query(
             "SELECT * FROM debts WHERE id = $1 AND user_id = $2",
-            [id, userId]
+            [debtId, userId]
         );
 
         if (checkQuery.rows.length === 0) {
@@ -102,7 +121,7 @@ exports.updateDebt = async (req, res) => {
                  updated_at = NOW()
              WHERE id = $6 AND user_id = $7
              RETURNING *`,
-            [debt_name, total_amount, creditor, due_date, notes, id, userId]
+            [debt_name, total_amount, creditor, due_date, notes, debtId, userId]
         );
 
         res.json({
@@ -120,12 +139,17 @@ exports.markDebtPaid = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
+        const debtId = parseInt(id, 10);
         const { amount_paid } = req.body; // Can be partial or full payment
+
+        if (Number.isNaN(debtId)) {
+            return res.status(400).json({ error: "Invalid debt id" });
+        }
 
         // Get current debt
         const debtQuery = await pool.query(
             "SELECT * FROM debts WHERE id = $1 AND user_id = $2",
-            [id, userId]
+            [debtId, userId]
         );
 
         if (debtQuery.rows.length === 0) {
@@ -160,7 +184,7 @@ exports.markDebtPaid = async (req, res) => {
              SET amount_paid = $1, status = $2, updated_at = NOW()
              WHERE id = $3 AND user_id = $4
              RETURNING *`,
-            [newAmountPaid, newStatus, id, userId]
+            [newAmountPaid, newStatus, debtId, userId]
         );
 
         res.json({
@@ -178,10 +202,15 @@ exports.deleteDebt = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
+        const debtId = parseInt(id, 10);
+
+        if (Number.isNaN(debtId)) {
+            return res.status(400).json({ error: "Invalid debt id" });
+        }
 
         const result = await pool.query(
             "DELETE FROM debts WHERE id = $1 AND user_id = $2 RETURNING *",
-            [id, userId]
+            [debtId, userId]
         );
 
         if (result.rows.length === 0) {

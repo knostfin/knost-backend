@@ -8,11 +8,18 @@ const pool = require("../db");
 exports.addRecurringExpense = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { category, amount, description, payment_method, start_month, end_month, due_day } = req.body;
+        let { category, amount, description, payment_method, start_month, end_month, due_day } = req.body;
+
+        // ⚠️ CRITICAL: Convert string numbers to proper decimals
+        amount = parseFloat(amount);
+        due_day = due_day ? parseInt(due_day, 10) : 1;
 
         // Validation
-        if (!category || !amount || amount <= 0) {
-            return res.status(400).json({ error: "Category and valid amount are required" });
+        if (!category || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ 
+                error: "Category and valid amount are required",
+                debug: { amount, type: typeof amount }
+            });
         }
 
         if (!start_month) {
@@ -27,9 +34,10 @@ exports.addRecurringExpense = async (req, res) => {
              start_month, end_month || null, due_day || 1]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.status(201).json({
             message: "Recurring expense added successfully",
-            expense: result.rows[0]
+            expense: formatted
         });
     } catch (err) {
         console.error("Add recurring expense error:", err);
@@ -54,8 +62,9 @@ exports.getRecurringExpenses = async (req, res) => {
         query += " ORDER BY category ASC";
 
         const result = await pool.query(query, params);
+        const formatted = pool.formatRows(result.rows);
 
-        res.json({ recurring_expenses: result.rows });
+        res.json({ recurring_expenses: formatted });
     } catch (err) {
         console.error("Get recurring expenses error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
@@ -94,9 +103,10 @@ exports.updateRecurringExpense = async (req, res) => {
             [category, amount, description, payment_method, end_month, due_day, is_active, id, userId]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Recurring expense updated successfully",
-            expense: result.rows[0]
+            expense: formatted
         });
     } catch (err) {
         console.error("Update recurring expense error:", err);
@@ -109,9 +119,15 @@ exports.deleteRecurringExpense = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
+        
+        await pool.query(
+            `DELETE FROM dev.monthly_expenses WHERE 
+            recurring_expense_id = $1 AND status = 'pending'`,
+            [id]
+        );
 
         const result = await pool.query(
-            "DELETE FROM recurring_expenses WHERE id = $1 AND user_id = $2 RETURNING *",
+            `DELETE FROM recurring_expenses WHERE id = $1 AND user_id = $2 RETURNING *`,
             [id, userId]
         );
 
@@ -195,9 +211,10 @@ exports.generateMonthlyExpenses = async (req, res) => {
 
         await client.query('COMMIT');
 
+        const formatted = pool.formatRows(generatedExpenses);
         res.status(201).json({
-            message: `${generatedExpenses.length} monthly expenses generated successfully`,
-            expenses: generatedExpenses
+            message: `${formatted.length} monthly expenses generated successfully`,
+            expenses: formatted
         });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -234,19 +251,20 @@ exports.getMonthlyExpenses = async (req, res) => {
         query += " ORDER BY due_date ASC, created_at DESC";
 
         const result = await pool.query(query, params);
+        const formatted = pool.formatRows(result.rows);
 
         // Calculate summary
         const summary = {
-            total_expenses: result.rows.length,
-            pending: result.rows.filter(e => e.status === 'pending').length,
-            paid: result.rows.filter(e => e.status === 'paid').length,
-            total_amount: result.rows.reduce((sum, e) => sum + parseFloat(e.amount), 0),
-            paid_amount: result.rows.filter(e => e.status === 'paid').reduce((sum, e) => sum + parseFloat(e.amount), 0),
-            pending_amount: result.rows.filter(e => e.status === 'pending').reduce((sum, e) => sum + parseFloat(e.amount), 0)
+            total_expenses: formatted.length,
+            pending: formatted.filter(e => e.status === 'pending').length,
+            paid: formatted.filter(e => e.status === 'paid').length,
+            total_amount: formatted.reduce((sum, e) => sum + parseFloat(e.amount), 0),
+            paid_amount: formatted.filter(e => e.status === 'paid').reduce((sum, e) => sum + parseFloat(e.amount), 0),
+            pending_amount: formatted.filter(e => e.status === 'pending').reduce((sum, e) => sum + parseFloat(e.amount), 0)
         };
 
         res.json({ 
-            expenses: result.rows,
+            expenses: formatted,
             summary: summary
         });
     } catch (err) {
@@ -259,11 +277,17 @@ exports.getMonthlyExpenses = async (req, res) => {
 exports.addMonthlyExpense = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { category, amount, description, payment_method, month_year, due_date } = req.body;
+        let { category, amount, description, payment_method, month_year, due_date, status, paid_on, debt_id, is_debt_payment } = req.body;
+
+        // ⚠️ CRITICAL: Convert string numbers to proper decimals
+        amount = parseFloat(amount);
 
         // Validation
-        if (!category || !amount || amount <= 0) {
-            return res.status(400).json({ error: "Category and valid amount are required" });
+        if (!category || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ 
+                error: "Category and valid amount are required",
+                debug: { amount, type: typeof amount }
+            });
         }
 
         if (!month_year || !/^\d{4}-\d{2}$/.test(month_year)) {
@@ -277,18 +301,34 @@ exports.addMonthlyExpense = async (req, res) => {
         const normalizedDueDate = due_date || `${month_year}-01`;
         const normalizedMonthYear = normalizedDueDate.slice(0, 7);
 
+        // Optional debt link
+        const parsedDebtId = debt_id !== undefined && debt_id !== null ? parseInt(debt_id, 10) : null;
+        const normalizedDebtId = Number.isFinite(parsedDebtId) ? parsedDebtId : null;
+        const normalizedIsDebtPayment = (() => {
+            if (typeof is_debt_payment === 'boolean') return is_debt_payment;
+            if (typeof is_debt_payment === 'string') return is_debt_payment.trim().toLowerCase() === 'true';
+            return false;
+        })();
+
+        // Allow caller to create already-paid expense (e.g., debt payment) instead of forcing pending
+        const normalizedStatus = status && ['pending', 'paid'].includes(status) ? status : 'pending';
+        const paidOnValue = normalizedStatus === 'paid'
+            ? (paid_on && !isNaN(Date.parse(paid_on)) ? paid_on : new Date().toISOString())
+            : null;
+
         const result = await pool.query(
-            `INSERT INTO monthly_expenses 
-             (user_id, category, amount, description, payment_method, month_year, due_date, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-             RETURNING *`,
-            [userId, category, amount, description || null, payment_method || 'cash', 
-             normalizedMonthYear, normalizedDueDate]
+              `INSERT INTO monthly_expenses 
+               (user_id, category, amount, description, payment_method, month_year, due_date, status, paid_on, debt_id, is_debt_payment)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               RETURNING *`,
+              [userId, category, amount, description || null, payment_method || 'cash', 
+               normalizedMonthYear, normalizedDueDate, normalizedStatus, paidOnValue, normalizedDebtId, normalizedIsDebtPayment]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.status(201).json({
             message: "Monthly expense added successfully",
-            expense: result.rows[0]
+            expense: formatted
         });
     } catch (err) {
         console.error("Add monthly expense error:", err);
@@ -341,9 +381,10 @@ exports.updateMonthlyExpense = async (req, res) => {
             [category, amount, description, payment_method, nextDueDate, nextMonthYear, id, userId]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Monthly expense updated successfully",
-            expense: result.rows[0]
+            expense: formatted
         });
     } catch (err) {
         console.error("Update monthly expense error:", err);
@@ -369,9 +410,10 @@ exports.markExpensePaid = async (req, res) => {
             return res.status(404).json({ error: "Monthly expense not found" });
         }
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Expense marked as paid",
-            expense: result.rows[0]
+            expense: formatted
         });
     } catch (err) {
         console.error("Mark expense paid error:", err);

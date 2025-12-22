@@ -4,6 +4,53 @@ const authController = require("../controllers/auth");
 const authMiddleware = require("../middlewares/authMiddleware");
 const { upload } = require("../middlewares/uploadMiddleware");
 
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *               - firstname
+ *               - lastname
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               password:
+ *                 type: string
+ *                 format: password
+ *               firstname:
+ *                 type: string
+ *               lastname:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Account created successfully, returns tokens
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                 refreshToken:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *       400:
+ *         description: Validation error or email already exists
+ */
 router.post("/register", authController.register);
 
 /**
@@ -38,11 +85,42 @@ router.post("/register", authController.register);
  * @swagger
  * /api/auth/login:
  *   post:
- *     summary: Login user
+ *     summary: Login user with email and password
  *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: User's email address
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 description: User's password
  *     responses:
  *       200:
- *         description: Login successful
+ *         description: Login successful, returns access and refresh tokens
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                 refreshToken:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *       401:
+ *         description: Invalid credentials
  */
 
 router.post("/login", authController.login);
@@ -72,13 +150,26 @@ router.post("/refresh", authController.refreshToken);
  * @swagger
  * /api/auth/verify:
  *   get:
- *     summary: Verify JWT access token
+ *     summary: Verify JWT access token validity
  *     tags: [Auth]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Token valid
+ *         description: Token valid and active
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 userId:
+ *                   type: string
+ *                 valid:
+ *                   type: boolean
+ *       401:
+ *         description: Token expired or invalid
+ *       403:
+ *         description: Token blacklisted or revoked
  */
 router.get("/verify", authController.verifyToken);
 

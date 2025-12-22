@@ -43,4 +43,34 @@ pool.on("error", (err) => {
   console.error("❌ Unexpected PG error", err);
 });
 
+// Helper: Format dates from pg to ISO strings without timezone conversion
+pool.formatDate = (date) => {
+  if (!date) return null;
+  if (typeof date === 'string') return date;
+  if (date instanceof Date) {
+    // Build YYYY-MM-DD using local date parts to avoid TZ shifts
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return date;
+};
+
+// Helper: Clean row dates before returning to client
+pool.formatRows = (rows) => {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(row => {
+    const formatted = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (value instanceof Date) {
+        formatted[key] = pool.formatDate(value);
+      } else {
+        formatted[key] = value;
+      }
+    }
+    return formatted;
+  });
+};
+
 module.exports = pool;
