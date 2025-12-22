@@ -14,6 +14,7 @@ const expenseRoutes = require("./routes/expenses");
 const incomeRoutes = require("./routes/income");
 const investmentRoutes = require("./routes/investments");
 const dashboardRoutes = require("./routes/dashboard");
+const categoryRoutes = require("./routes/categories");
 const errorHandler = require("./middlewares/errorHandler");
 const securityResponseChecker = require("./middlewares/securityMiddleware");
 const { startCleanupJob } = require("./services/tokenCleanupService");
@@ -159,6 +160,7 @@ app.use("/api/expenses", expenseRoutes);
 app.use("/api/income", incomeRoutes);
 app.use("/api/investments", investmentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/categories", categoryRoutes);
 
 // -----------------------------
 // Neon DB warm-up (run every 1 hour)

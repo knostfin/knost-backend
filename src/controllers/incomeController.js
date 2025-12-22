@@ -4,11 +4,17 @@ const pool = require("../db");
 exports.addIncome = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { source, amount, description, month_year, received_on } = req.body;
+        let { source, amount, description, month_year, received_on } = req.body;
+
+        // ⚠️ CRITICAL: Convert string numbers to proper decimals
+        amount = parseFloat(amount);
 
         // Validation
-        if (!source || !amount || amount <= 0) {
-            return res.status(400).json({ error: "Source and valid amount are required" });
+        if (!source || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ 
+                error: "Source and valid amount are required",
+                debug: { amount, type: typeof amount }
+            });
         }
 
         if (!month_year || !/^\d{4}-\d{2}$/.test(month_year)) {
@@ -24,9 +30,10 @@ exports.addIncome = async (req, res) => {
             [userId, source, amount, description || null, month_year, receivedDate]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.status(201).json({
             message: "Income added successfully",
-            income: result.rows[0]
+            income: formatted
         });
     } catch (err) {
         console.error("Add income error:", err);
@@ -63,15 +70,16 @@ exports.getIncome = async (req, res) => {
         query += " ORDER BY received_on DESC, created_at DESC";
 
         const result = await pool.query(query, params);
+        const formatted = pool.formatRows(result.rows);
 
         // Calculate summary
         const summary = {
-            total_income: result.rows.reduce((sum, i) => sum + parseFloat(i.amount), 0),
-            count: result.rows.length
+            total_income: formatted.reduce((sum, i) => sum + parseFloat(i.amount), 0),
+            count: formatted.length
         };
 
         res.json({ 
-            income: result.rows,
+            income: formatted,
             summary: summary
         });
     } catch (err) {
@@ -95,7 +103,8 @@ exports.getIncomeDetails = async (req, res) => {
             return res.status(404).json({ error: "Income not found" });
         }
 
-        res.json({ income: result.rows[0] });
+        const formatted = pool.formatRows([result.rows[0]])[0];
+        res.json({ income: formatted });
     } catch (err) {
         console.error("Get income details error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
@@ -131,9 +140,10 @@ exports.updateIncome = async (req, res) => {
             [source, amount, description, received_on, id, userId]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Income updated successfully",
-            income: result.rows[0]
+            income: formatted
         });
     } catch (err) {
         console.error("Update income error:", err);

@@ -65,6 +65,28 @@ router.get("/", debtController.getDebts);
 
 /**
  * @swagger
+ * /api/debts/monthly-due:
+ *   get:
+ *     summary: Get debts due for a specific month
+ *     tags: [Debts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month_year
+ *         schema:
+ *           type: string
+ *           description: Format YYYY-MM, defaults to current month
+ *     responses:
+ *       200:
+ *         description: Monthly debts due with summary
+ */
+router.get("/monthly-due", debtController.getMonthlyDebtsDue);
+// Legacy/alternate path
+router.get("/monthly-due/list", debtController.getMonthlyDebtsDue);
+
+/**
+ * @swagger
  * /api/debts/{id}:
  *   get:
  *     summary: Get debt details
@@ -169,25 +191,5 @@ router.delete("/:id", debtController.deleteDebt);
  *         description: Debt payment recorded
  */
 router.post("/:id/pay", debtController.markDebtPaid);
-
-/**
- * @swagger
- * /api/debts/monthly-due:
- *   get:
- *     summary: Get debts due for a specific month
- *     tags: [Debts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: month_year
- *         schema:
- *           type: string
- *           description: Format YYYY-MM, defaults to current month
- *     responses:
- *       200:
- *         description: Monthly debts due with summary
- */
-router.get("/monthly-due/list", debtController.getMonthlyDebtsDue);
 
 module.exports = router;

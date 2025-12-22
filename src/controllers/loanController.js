@@ -44,23 +44,106 @@ const generatePaymentSchedule = (loanId, userId, principal, annualRate, tenureMo
     return payments;
 };
 
+// ======================== NEW HELPERS ========================
+// Helper function to generate EMI expenses from loan payment schedule
+const generateEMIExpenses = async (client, loanId, userId, loanName, paymentSchedule) => {
+    try {
+        for (const payment of paymentSchedule) {
+            const [year, month, day] = payment.payment_date.split('-');
+            const monthYear = `${year}-${month}`;
+            
+            await client.query(
+                `INSERT INTO monthly_expenses 
+                 (user_id, loan_id, loan_payment_id, is_emi, category, amount, description, payment_method, month_year, due_date, status)
+                 VALUES ($1, $2, (SELECT id FROM loan_payments WHERE loan_id = $3 AND payment_number = $4), 
+                         true, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                    userId,
+                    loanId,
+                    loanId,
+                    payment.payment_number,
+                    `EMI - ${loanName}`,
+                    payment.emi_amount,
+                    `EMI Payment #${payment.payment_number}`,
+                    'bank_transfer',
+                    monthYear,
+                    payment.payment_date,
+                    'pending'
+                ]
+            );
+        }
+        console.log(`Generated ${paymentSchedule.length} EMI expense entries for loan ${loanId}`);
+    } catch (err) {
+        console.error("Error generating EMI expenses:", err);
+        throw err;
+    }
+};
+
+// Helper function to delete pending EMI expenses when loan is deleted/closed
+const deletePendingEMIExpenses = async (client, loanId) => {
+    try {
+        const result = await client.query(
+            `DELETE FROM monthly_expenses 
+             WHERE loan_id = $1 AND status = 'pending' AND is_emi = true
+             RETURNING id`,
+            [loanId]
+        );
+        console.log(`Deleted ${result.rows.length} pending EMI expenses for loan ${loanId}`);
+        return result.rows.length;
+    } catch (err) {
+        console.error("Error deleting pending EMI expenses:", err);
+        throw err;
+    }
+};
+
+// Helper function to update EMI expense status when payment is marked
+const updateEMIExpenseStatus = async (client, loanPaymentId, status) => {
+    try {
+        const paidOn = status === 'paid' ? new Date().toISOString() : null;
+        
+        const result = await client.query(
+            `UPDATE monthly_expenses 
+             SET status = $1, paid_on = $2, updated_at = NOW()
+             WHERE loan_payment_id = $3 AND is_emi = true
+             RETURNING id`,
+            [status, paidOn, loanPaymentId]
+        );
+         
+        if (result.rows.length > 0) {
+            console.log(`Updated EMI expense status to ${status} for payment ${loanPaymentId}`);
+        }
+        return result.rows.length;
+    } catch (err) {
+        console.error("Error updating EMI expense status:", err);
+        throw err;
+    }
+};
+
 // ---------------------- ADD LOAN -------------------------
 exports.addLoan = async (req, res) => {
     const client = await pool.connect();
     try {
         const userId = req.user.id;
-        const { loan_name, principal_amount, interest_rate, tenure_months, start_date, notes } = req.body;
+        let { loan_name, principal_amount, interest_rate, tenure_months, start_date, notes } = req.body;
+
+        // ⚠️ CRITICAL: Convert string numbers to proper decimals
+        principal_amount = parseFloat(principal_amount);
+        interest_rate = parseFloat(interest_rate);
+        tenure_months = parseInt(tenure_months, 10);
 
         // Validation
-        if (!loan_name || !principal_amount || principal_amount <= 0) {
-            return res.status(400).json({ error: "Loan name and valid principal amount are required" });
+        if (!loan_name || isNaN(principal_amount) || principal_amount <= 0) {
+            return res.status(400).json({ 
+                error: "Loan name and valid principal amount are required",
+                debug: { principal_amount, type: typeof principal_amount }
+            });
         }
 
-        if (!tenure_months || tenure_months <= 0) {
+        if (!tenure_months || isNaN(tenure_months) || tenure_months <= 0) {
             return res.status(400).json({ error: "Valid tenure in months is required" });
         }
 
-        if (interest_rate === undefined || interest_rate < 0) {
+        if (isNaN(interest_rate) || interest_rate < 0) {
             return res.status(400).json({ error: "Valid interest rate is required" });
         }
 
@@ -100,11 +183,16 @@ exports.addLoan = async (req, res) => {
             );
         }
 
+        // ✨ NEW: Generate EMI expenses (auto-create monthly expenses from payment schedule)
+        await generateEMIExpenses(client, loan.id, userId, loan_name, paymentSchedule);
+
         await client.query('COMMIT');
 
+        const formatted = pool.formatRows([loan])[0];
         res.status(201).json({
-            message: "Loan added successfully with payment schedule",
-            loan: loan
+            message: "Loan added successfully with payment schedule and monthly EMI expenses generated",
+            loan: formatted,
+            emi_expenses_count: paymentSchedule.length
         });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -132,9 +220,10 @@ exports.getLoans = async (req, res) => {
         query += " ORDER BY created_at DESC";
 
         const result = await pool.query(query, params);
+        const formattedLoans = pool.formatRows(result.rows);
 
         // Get payment summary for each loan
-        const loansWithSummary = await Promise.all(result.rows.map(async (loan) => {
+        const loansWithSummary = await Promise.all(formattedLoans.map(async (loan) => {
             const paymentSummary = await pool.query(
                 `SELECT 
                     COUNT(*) as total_payments,
@@ -181,9 +270,12 @@ exports.getLoanDetails = async (req, res) => {
             [id]
         );
 
+        const formattedLoan = pool.formatRows([loanResult.rows[0]])[0];
+        const formattedPayments = pool.formatRows(paymentsResult.rows);
+
         res.json({
-            loan: loanResult.rows[0],
-            payments: paymentsResult.rows
+            loan: formattedLoan,
+            payments: formattedPayments
         });
     } catch (err) {
         console.error("Get loan details error:", err);
@@ -219,9 +311,10 @@ exports.updateLoan = async (req, res) => {
             [loan_name, notes, status, id, userId]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Loan updated successfully",
-            loan: result.rows[0]
+            loan: formatted
         });
     } catch (err) {
         console.error("Update loan error:", err);
@@ -231,26 +324,40 @@ exports.updateLoan = async (req, res) => {
 
 // ---------------------- CLOSE LOAN -------------------------
 exports.closeLoan = async (req, res) => {
+    const client = await pool.connect();
     try {
         const userId = req.user.id;
         const { id } = req.params;
 
-        const result = await pool.query(
+        await client.query('BEGIN');
+
+        // ✨ NEW: Delete pending EMI expenses when closing loan
+        const deletedCount = await deletePendingEMIExpenses(client, id);
+
+        const result = await client.query(
             "UPDATE loans SET status = 'closed', updated_at = NOW() WHERE id = $1 AND user_id = $2 RETURNING *",
             [id, userId]
         );
 
         if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ error: "Loan not found" });
         }
 
+        await client.query('COMMIT');
+
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Loan closed successfully",
-            loan: result.rows[0]
+            loan: formatted,
+            pending_emi_expenses_deleted: deletedCount
         });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error("Close loan error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
+    } finally {
+        client.release();
     }
 };
 
@@ -292,12 +399,13 @@ exports.getLoanPayments = async (req, res) => {
 
 // ---------------------- MARK EMI AS PAID -------------------------
 exports.markEMIPaid = async (req, res) => {
+    const client = await pool.connect();
     try {
         const userId = req.user.id;
         const { id, paymentId } = req.params;
 
         // Verify loan ownership
-        const loanCheck = await pool.query(
+        const loanCheck = await client.query(
             "SELECT id FROM loans WHERE id = $1 AND user_id = $2",
             [id, userId]
         );
@@ -306,7 +414,9 @@ exports.markEMIPaid = async (req, res) => {
             return res.status(404).json({ error: "Loan not found" });
         }
 
-        const result = await pool.query(
+        await client.query('BEGIN');
+
+        const result = await client.query(
             `UPDATE loan_payments 
              SET status = 'paid', paid_on = NOW()
              WHERE id = $1 AND loan_id = $2
@@ -315,16 +425,26 @@ exports.markEMIPaid = async (req, res) => {
         );
 
         if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ error: "Payment not found" });
         }
 
+        // ✨ NEW: Also update corresponding monthly expense status
+        await updateEMIExpenseStatus(client, paymentId, 'paid');
+
+        await client.query('COMMIT');
+
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
-            message: "EMI marked as paid",
-            payment: result.rows[0]
+            message: "EMI marked as paid and expense updated",
+            payment: formatted
         });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error("Mark EMI paid error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
+    } finally {
+        client.release();
     }
 };
 
@@ -380,22 +500,37 @@ exports.getMonthlyEMIDue = async (req, res) => {
 
 // ---------------------- DELETE LOAN -------------------------
 exports.deleteLoan = async (req, res) => {
+    const client = await pool.connect();
     try {
         const userId = req.user.id;
         const { id } = req.params;
 
-        const result = await pool.query(
+        await client.query('BEGIN');
+
+        // ✨ NEW: Delete pending EMI expenses when deleting loan
+        const deletedCount = await deletePendingEMIExpenses(client, id);
+
+        const result = await client.query(
             "DELETE FROM loans WHERE id = $1 AND user_id = $2 RETURNING *",
             [id, userId]
         );
 
         if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ error: "Loan not found" });
         }
 
-        res.json({ message: "Loan deleted successfully" });
+        await client.query('COMMIT');
+
+        res.json({ 
+            message: "Loan deleted successfully",
+            pending_emi_expenses_deleted: deletedCount
+        });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error("Delete loan error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
+    } finally {
+        client.release();
     }
 };

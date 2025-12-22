@@ -4,11 +4,17 @@ const pool = require("../db");
 exports.addInvestment = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { investment_type, name, amount, invested_on, maturity_date, notes } = req.body;
+        let { investment_type, name, amount, invested_on, maturity_date, notes } = req.body;
+
+        // ⚠️ CRITICAL: Convert string numbers to proper decimals
+        amount = parseFloat(amount);
 
         // Validation
-        if (!investment_type || !name || !amount || amount <= 0) {
-            return res.status(400).json({ error: "Investment type, name, and valid amount are required" });
+        if (!investment_type || !name || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ 
+                error: "Investment type, name, and valid amount are required",
+                debug: { amount, type: typeof amount }
+            });
         }
 
         const validTypes = ['mutual_fund', 'stocks', 'savings', 'fd', 'ppf', 'gold', 'real_estate', 'crypto', 'other'];
@@ -16,7 +22,8 @@ exports.addInvestment = async (req, res) => {
             return res.status(400).json({ error: "Invalid investment type" });
         }
 
-        const investedDate = invested_on || new Date().toISOString().split('T')[0];
+        // Get local date without timezone conversion (YYYY-MM-DD)
+        const investedDate = invested_on || new Date().toLocaleDateString('en-CA');
 
         const result = await pool.query(
             `INSERT INTO investments (user_id, investment_type, name, amount, invested_on, maturity_date, notes, status)
@@ -25,9 +32,10 @@ exports.addInvestment = async (req, res) => {
             [userId, investment_type, name, amount, investedDate, maturity_date || null, notes || null]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.status(201).json({
             message: "Investment added successfully",
-            investment: result.rows[0]
+            investment: formatted
         });
     } catch (err) {
         console.error("Add investment error:", err);
@@ -60,19 +68,20 @@ exports.getInvestments = async (req, res) => {
         query += " ORDER BY invested_on DESC, created_at DESC";
 
         const result = await pool.query(query, params);
+        const formatted = pool.formatRows(result.rows);
 
         // Calculate summary
         const summary = {
-            total_investments: result.rows.length,
-            total_invested: result.rows.reduce((sum, i) => sum + parseFloat(i.amount), 0),
-            current_value: result.rows.reduce((sum, i) => sum + parseFloat(i.current_value || i.amount), 0),
-            total_returns: result.rows.reduce((sum, i) => sum + parseFloat(i.returns || 0), 0),
-            active: result.rows.filter(i => i.status === 'active').length,
-            matured: result.rows.filter(i => i.status === 'matured').length
+            total_investments: formatted.length,
+            total_invested: formatted.reduce((sum, i) => sum + parseFloat(i.amount), 0),
+            current_value: formatted.reduce((sum, i) => sum + parseFloat(i.current_value || i.amount), 0),
+            total_returns: formatted.reduce((sum, i) => sum + parseFloat(i.returns || 0), 0),
+            active: formatted.filter(i => i.status === 'active').length,
+            matured: formatted.filter(i => i.status === 'matured').length
         };
 
         res.json({ 
-            investments: result.rows,
+            investments: formatted,
             summary: summary
         });
     } catch (err) {
@@ -96,7 +105,8 @@ exports.getInvestmentDetails = async (req, res) => {
             return res.status(404).json({ error: "Investment not found" });
         }
 
-        res.json({ investment: result.rows[0] });
+        const formatted = pool.formatRows([result.rows[0]])[0];
+        res.json({ investment: formatted });
     } catch (err) {
         console.error("Get investment details error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
@@ -134,9 +144,10 @@ exports.updateInvestment = async (req, res) => {
             [name, maturity_date, current_value, returns, status, notes, id, userId]
         );
 
+        const formatted = pool.formatRows([result.rows[0]])[0];
         res.json({
             message: "Investment updated successfully",
-            investment: result.rows[0]
+            investment: formatted
         });
     } catch (err) {
         console.error("Update investment error:", err);
