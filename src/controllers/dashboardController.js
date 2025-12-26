@@ -102,8 +102,8 @@ exports.getMonthlyOverview = async (req, res) => {
                 COUNT(distinct d.id) as total_count,
                 SUM(me.amount) as total_amount
             from
-                dev.debts d
-            inner join dev.monthly_expenses me
+                debts d
+            inner join monthly_expenses me
                 on me.user_id = d.user_id
                 and me.debt_id = d.id
                 and me.category LIKE '%Debt%'
