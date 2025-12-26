@@ -18,6 +18,8 @@ const generatePaymentSchedule = (loanId, userId, principal, annualRate, tenureMo
     const payments = [];
     const monthlyRate = annualRate / (12 * 100);
     let outstandingBalance = parseFloat(principal);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Reset to start of day for comparison
     
     for (let i = 1; i <= tenureMonths; i++) {
         const interestPaid = outstandingBalance * monthlyRate;
@@ -27,17 +29,22 @@ const generatePaymentSchedule = (loanId, userId, principal, annualRate, tenureMo
         // Calculate payment date (add i months to start date)
         const paymentDate = new Date(startDate);
         paymentDate.setMonth(paymentDate.getMonth() + i);
+        const paymentDateStr = paymentDate.toISOString().split('T')[0];
+        
+        // Auto-mark as paid if payment date is before today
+        const isPast = paymentDate < today;
         
         payments.push({
             loan_id: loanId,
             user_id: userId,
             payment_number: i,
-            payment_date: paymentDate.toISOString().split('T')[0],
+            payment_date: paymentDateStr,
             emi_amount: parseFloat(emiAmount),
             principal_paid: principalPaid.toFixed(2),
             interest_paid: interestPaid.toFixed(2),
             outstanding_balance: Math.max(0, outstandingBalance).toFixed(2),
-            status: 'pending'
+            status: isPast ? 'paid' : 'pending',
+            paid_on: isPast ? paymentDateStr : null
         });
     }
     
@@ -52,11 +59,15 @@ const generateEMIExpenses = async (client, loanId, userId, loanName, paymentSche
             const [year, month, day] = payment.payment_date.split('-');
             const monthYear = `${year}-${month}`;
             
+            // Use same status and paid_on from payment schedule
+            const expenseStatus = payment.status;
+            const paidOn = payment.paid_on;
+            
             await client.query(
                 `INSERT INTO monthly_expenses 
-                 (user_id, loan_id, loan_payment_id, is_emi, category, amount, description, payment_method, month_year, due_date, status)
+                 (user_id, loan_id, loan_payment_id, is_emi, category, amount, description, payment_method, month_year, due_date, status, paid_on)
                  VALUES ($1, $2, (SELECT id FROM loan_payments WHERE loan_id = $3 AND payment_number = $4), 
-                         true, $5, $6, $7, $8, $9, $10, $11)`,
+                         true, $5, $6, $7, $8, $9, $10, $11, $12)`,
                 [
                     userId,
                     loanId,
@@ -68,7 +79,8 @@ const generateEMIExpenses = async (client, loanId, userId, loanName, paymentSche
                     'bank_transfer',
                     monthYear,
                     payment.payment_date,
-                    'pending'
+                    expenseStatus,
+                    paidOn
                 ]
             );
         }
@@ -176,10 +188,10 @@ exports.addLoan = async (req, res) => {
         // Insert all payments
         for (const payment of paymentSchedule) {
             await client.query(
-                `INSERT INTO loan_payments (loan_id, user_id, payment_number, payment_date, emi_amount, principal_paid, interest_paid, outstanding_balance, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                `INSERT INTO loan_payments (loan_id, user_id, payment_number, payment_date, emi_amount, principal_paid, interest_paid, outstanding_balance, status, paid_on)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
                 [payment.loan_id, payment.user_id, payment.payment_number, payment.payment_date, 
-                 payment.emi_amount, payment.principal_paid, payment.interest_paid, payment.outstanding_balance, payment.status]
+                 payment.emi_amount, payment.principal_paid, payment.interest_paid, payment.outstanding_balance, payment.status, payment.paid_on]
             );
         }
 
@@ -189,10 +201,15 @@ exports.addLoan = async (req, res) => {
         await client.query('COMMIT');
 
         const formatted = pool.formatRows([loan])[0];
+        const paidCount = paymentSchedule.filter(p => p.status === 'paid').length;
+        const pendingCount = paymentSchedule.filter(p => p.status === 'pending').length;
+        
         res.status(201).json({
             message: "Loan added successfully with payment schedule and monthly EMI expenses generated",
             loan: formatted,
-            emi_expenses_count: paymentSchedule.length
+            emi_expenses_count: paymentSchedule.length,
+            past_payments_marked_paid: paidCount,
+            future_payments_pending: pendingCount
         });
     } catch (err) {
         await client.query('ROLLBACK');
