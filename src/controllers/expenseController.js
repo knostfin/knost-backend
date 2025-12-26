@@ -88,6 +88,21 @@ exports.updateRecurringExpense = async (req, res) => {
             return res.status(404).json({ error: "Recurring expense not found" });
         }
 
+        // If updating due_day, check if any paid monthly expenses exist
+        if (due_day !== undefined && due_day !== null) {
+            const paidExpenses = await pool.query(
+                `SELECT COUNT(*) as count FROM monthly_expenses 
+                 WHERE recurring_expense_id = $1 AND user_id = $2 AND status = 'paid'`,
+                [id, userId]
+            );
+            
+            if (parseInt(paidExpenses.rows[0].count) > 0) {
+                return res.status(400).json({ 
+                    error: "Cannot change due_day for recurring expense with paid monthly expenses. Consider creating a new recurring expense instead." 
+                });
+            }
+        }
+
         const result = await pool.query(
             `UPDATE recurring_expenses 
              SET category = COALESCE($1, category),
@@ -116,29 +131,39 @@ exports.updateRecurringExpense = async (req, res) => {
 
 // ---------------------- DELETE RECURRING EXPENSE -------------------------
 exports.deleteRecurringExpense = async (req, res) => {
+    const client = await pool.connect();
     try {
         const userId = req.user.id;
         const { id } = req.params;
         
-        await pool.query(
-            `DELETE FROM dev.monthly_expenses WHERE 
-            recurring_expense_id = $1 AND status = 'pending'`,
-            [id]
+        await client.query('BEGIN');
+        
+        // Delete only pending monthly expenses tied to this recurring expense
+        await client.query(
+            `DELETE FROM monthly_expenses WHERE 
+            recurring_expense_id = $1 AND user_id = $2 AND status = 'pending'`,
+            [id, userId]
         );
 
-        const result = await pool.query(
+        // Delete the recurring expense itself
+        const result = await client.query(
             `DELETE FROM recurring_expenses WHERE id = $1 AND user_id = $2 RETURNING *`,
             [id, userId]
         );
 
         if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ error: "Recurring expense not found" });
         }
 
+        await client.query('COMMIT');
         res.json({ message: "Recurring expense deleted successfully" });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error("Delete recurring expense error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
+    } finally {
+        client.release();
     }
 };
 
@@ -157,26 +182,22 @@ exports.generateMonthlyExpenses = async (req, res) => {
             return res.status(400).json({ error: "Invalid month_year format. Use YYYY-MM" });
         }
 
-        // Check if expenses already generated for this month
-        const existingCheck = await client.query(
-            `SELECT COUNT(*) as count FROM monthly_expenses 
-             WHERE user_id = $1 AND month_year = $2 AND recurring_expense_id IS NOT NULL`,
-            [userId, month_year]
-        );
-
-        if (parseInt(existingCheck.rows[0].count) > 0) {
-            return res.status(400).json({ error: "Monthly expenses already generated for this month" });
-        }
-
-        // Get active recurring expenses
+        // Get active recurring expenses that haven't been generated yet for this month
         const monthDate = `${month_year}-01`;
         const recurringExpenses = await client.query(
-            `SELECT * FROM recurring_expenses 
-             WHERE user_id = $1 
-             AND is_active = true 
-             AND start_month <= $2
-             AND (end_month IS NULL OR end_month >= $2)`,
-            [userId, monthDate]
+            `SELECT re.* 
+             FROM recurring_expenses re
+             WHERE re.user_id = $1 
+             AND re.is_active = true 
+             AND re.start_month <= $2
+             AND (re.end_month IS NULL OR re.end_month >= $2)
+             AND NOT EXISTS (
+                 SELECT 1 FROM monthly_expenses me
+                 WHERE me.user_id = $1
+                 AND me.month_year = $3
+                 AND me.recurring_expense_id = re.id
+             )`,
+            [userId, monthDate, month_year]
         );
 
         if (recurringExpenses.rows.length === 0) {
