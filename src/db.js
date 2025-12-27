@@ -74,3 +74,26 @@ pool.formatRows = (rows) => {
 };
 
 module.exports = pool;
+
+// Transaction helper: run a function within BEGIN/COMMIT with automatic ROLLBACK on error
+module.exports.withTransaction = async (fn) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+// Advisory lock helper: scopes lock to (key1,key2) for the duration of the transaction
+module.exports.acquireAdvisoryLock = async (client, key1, key2) => {
+  if (client && Number.isFinite(key1) && Number.isFinite(key2)) {
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [key1, key2]);
+  }
+};

@@ -131,39 +131,54 @@ exports.updateRecurringExpense = async (req, res) => {
 
 // ---------------------- DELETE RECURRING EXPENSE -------------------------
 exports.deleteRecurringExpense = async (req, res) => {
-    const client = await pool.connect();
     try {
         const userId = req.user.id;
         const { id } = req.params;
-        
-        await client.query('BEGIN');
-        
-        // Delete only pending monthly expenses tied to this recurring expense
-        await client.query(
-            `DELETE FROM monthly_expenses WHERE 
-            recurring_expense_id = $1 AND user_id = $2 AND status = 'pending'`,
-            [id, userId]
-        );
 
-        // Delete the recurring expense itself
-        const result = await client.query(
-            `DELETE FROM recurring_expenses WHERE id = $1 AND user_id = $2 RETURNING *`,
-            [id, userId]
-        );
+        await pool.withTransaction(async (client) => {
+            // Serialize per user + recurring to avoid races
+            const recurringIdInt = parseInt(id, 10);
+            await pool.acquireAdvisoryLock(client, userId, recurringIdInt);
 
-        if (result.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Recurring expense not found" });
-        }
+            // Ensure recurring exists for this user
+            const exists = await client.query(
+                'SELECT id FROM recurring_expenses WHERE id = $1 AND user_id = $2',
+                [id, userId]
+            );
+            if (exists.rows.length === 0) {
+                throw Object.assign(new Error('Recurring expense not found'), { status: 404 });
+            }
 
-        await client.query('COMMIT');
-        res.json({ message: "Recurring expense deleted successfully" });
+            // 1) Detach paid monthly expenses (keep records, remove recurring link)
+            await client.query(
+                `UPDATE monthly_expenses 
+                 SET recurring_expense_id = NULL, updated_at = NOW()
+                 WHERE recurring_expense_id = $1 AND user_id = $2 AND status = 'paid'`,
+                [id, userId]
+            );
+
+            // 2) Delete pending monthly expenses generated from this recurring expense
+            await client.query(
+                `DELETE FROM monthly_expenses 
+                 WHERE recurring_expense_id = $1 AND user_id = $2 AND status = 'pending'`,
+                [id, userId]
+            );
+
+            // 3) Delete the recurring template itself
+            const result = await client.query(
+                `DELETE FROM recurring_expenses WHERE id = $1 AND user_id = $2 RETURNING *`,
+                [id, userId]
+            );
+            if (result.rows.length === 0) {
+                throw Object.assign(new Error('Recurring expense not found'), { status: 404 });
+            }
+        });
+
+        res.json({ message: 'Recurring expense deleted successfully' });
     } catch (err) {
-        await client.query('ROLLBACK');
-        console.error("Delete recurring expense error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    } finally {
-        client.release();
+        const status = err && err.status ? err.status : 500;
+        console.error('Delete recurring expense error:', err);
+        res.status(status).json({ error: status === 404 ? 'Recurring expense not found' : 'Server error', details: err.message });
     }
 };
 
@@ -214,9 +229,11 @@ exports.generateMonthlyExpenses = async (req, res) => {
         // Generate monthly expense for each recurring expense
         for (const recurring of recurringExpenses.rows) {
             // Calculate due date
-            const [year, month] = month_year.split('-');
-            const dueDay = Math.min(recurring.due_day, new Date(year, month, 0).getDate()); // Handle months with fewer days
-            const dueDate = `${year}-${month}-${String(dueDay).padStart(2, '0')}`;
+            const [year, monthStr] = month_year.split('-');
+            const monthIdx = parseInt(monthStr, 10); // 1-12
+            const lastDay = new Date(parseInt(year, 10), monthIdx, 0).getDate(); // last day of target month
+            const dueDay = Math.min(recurring.due_day, lastDay); // Handle months with fewer days
+            const dueDate = `${year}-${monthStr}-${String(dueDay).padStart(2, '0')}`;
 
             const result = await client.query(
                 `INSERT INTO monthly_expenses 
