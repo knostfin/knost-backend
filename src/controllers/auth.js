@@ -805,9 +805,12 @@ exports.verifyNewEmail = async (req, res) => {
         }
 
         // Find and delete the verification code in one atomic operation
+        // Enforce 60 minute expiry window to prevent reuse of stale codes
         const verification = await pool.query(
             `DELETE FROM email_verifications 
-             WHERE user_id = $1 AND token = $2 
+             WHERE user_id = $1 
+               AND token = $2 
+               AND created_at >= NOW() - INTERVAL '60 minutes'
              RETURNING email`,
             [userId, code]
         );

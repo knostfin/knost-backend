@@ -51,6 +51,9 @@ Sitemap: https://knost.in/sitemap.xml`);
 ------------------------------------------------------------------- */
 app.set("trust proxy", 1);
 
+// Hide framework header for a tiny security hardening win
+app.disable("x-powered-by");
+
 /* ------------------------------------------------------------------
    3️⃣ START BACKGROUND JOB (DELAYED TO REDUCE COLD START)
 ------------------------------------------------------------------- */

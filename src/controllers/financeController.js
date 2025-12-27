@@ -207,7 +207,7 @@ exports.getCategoryBreakdown = async (req, res) => {
         const userId = req.user.id;
         const { type, period } = req.query;
 
-        let dateFilter = "";
+        let dateFromValue = null;
         if (period) {
             const now = new Date();
             let dateFrom;
@@ -225,21 +225,32 @@ exports.getCategoryBreakdown = async (req, res) => {
             }
 
             if (dateFrom) {
-                dateFilter = `AND transaction_date >= '${
-                    dateFrom.toISOString().split("T")[0]
-                }'`;
+                dateFromValue = dateFrom.toISOString().split("T")[0];
             }
         }
 
-        const typeFilter = type ? `AND type = '${type}'` : "";
+        const clauses = ["user_id = $1"];
+        const params = [userId];
+
+        if (type && ["income", "expense", "debt"].includes(type)) {
+            params.push(type);
+            clauses.push(`type = $${params.length}`);
+        }
+
+        if (dateFromValue) {
+            params.push(dateFromValue);
+            clauses.push(`transaction_date >= $${params.length}`);
+        }
+
+        const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 
         const result = await pool.query(
             `SELECT category, type, SUM(amount) as total, COUNT(*) as count
              FROM transactions 
-             WHERE user_id = $1 ${typeFilter} ${dateFilter}
+             ${whereClause}
              GROUP BY category, type
              ORDER BY total DESC`,
-            [userId]
+            params
         );
 
         res.json({ breakdown: result.rows });
@@ -254,6 +265,7 @@ exports.getMonthlyTrend = async (req, res) => {
     try {
         const userId = req.user.id;
         const { months = 6 } = req.query;
+        const monthsInt = Math.min(Math.max(parseInt(months, 10) || 6, 1), 24);
 
         const result = await pool.query(
             `SELECT 
@@ -262,12 +274,10 @@ exports.getMonthlyTrend = async (req, res) => {
                 SUM(amount) as total
              FROM transactions 
              WHERE user_id = $1 
-                AND transaction_date >= NOW() - INTERVAL '${parseInt(
-                    months
-                )} months'
+                AND transaction_date >= NOW() - ($2 || ' months')::interval
              GROUP BY month, type
              ORDER BY month DESC`,
-            [userId]
+            [userId, monthsInt]
         );
 
         res.json({ trend: result.rows });
