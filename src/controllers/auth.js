@@ -1,16 +1,51 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto"); // SECURITY: Used for hashing OTPs and tokens
 const pool = require("../db");
 const { sendVerificationEmail, sendPasswordResetEmail } = require("../services/emailService");
 const { blacklistToken } = require("../services/tokenBlacklistService");
-const { devLog } = require("../utils/security");
 const { uploadToCloudinary, deleteFromCloudinary } = require("../services/cloudinaryService");
 const { validatePhoneNumber, formatPhoneFromParts } = require("../utils/phoneValidator");
+
+// SECURITY: Check if running in production
+const isProduction = process.env.NODE_ENV === "production";
+
+// SECURITY: Hash sensitive data (OTPs, tokens) before storage using SHA-256
+// This is a one-way hash - we compare hashes, not plaintext
+function hashSensitiveData(data) {
+    return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// SECURITY: Timing-safe comparison to prevent timing attacks
+function secureCompare(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// SECURITY: Sanitize error messages for production
+function sanitizeError(err) {
+    if (isProduction) {
+        // Log full error server-side only
+        console.error("[SERVER ERROR]", err.message, err.stack);
+        return "An unexpected error occurred";
+    }
+    return err.message;
+}
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
     ? require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
     : null;
+
+// SECURITY: Cookie options for refresh tokens (HttpOnly, Secure, SameSite)
+const REFRESH_TOKEN_COOKIE_OPTIONS = {
+    httpOnly: true,                                    // Prevents XSS access to cookie
+    secure: isProduction,                              // HTTPS only in production
+    sameSite: isProduction ? 'strict' : 'lax',        // CSRF protection
+    maxAge: 7 * 24 * 60 * 60 * 1000,                  // 7 days in milliseconds
+    path: '/',
+};
 
 // Generate access token
 function generateAccessToken(user) {
@@ -121,7 +156,7 @@ exports.register = async (req, res) => {
         });
 
     } catch (err) {
-        res.status(500).json({ error: "Something went wrong", details: err.message });
+        res.status(500).json({ error: "Something went wrong", details: sanitizeError(err) });
     }
 };
 
@@ -184,35 +219,48 @@ exports.login = async (req, res) => {
 
         const refreshToken = generateRefreshToken({ id: user.id });
 
-        // Save refresh token
+        // SECURITY: Hash refresh token before storing in database
+        const hashedRefreshToken = hashSensitiveData(refreshToken);
+
+        // Save hashed refresh token
         await pool.query(
             "INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)",
-            [user.id, refreshToken]
+            [user.id, hashedRefreshToken]
         );
+
+        // SECURITY: Set refresh token as HttpOnly cookie instead of response body
+        res.cookie('refreshToken', refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
 
         res.json({
             message: "Login successful",
             token: accessToken,
+            // SECURITY: Also return refreshToken in body for backward compatibility
+            // Frontend should migrate to using HttpOnly cookie
             refreshToken,
             user: mapUser(user),
         });
 
     } catch (err) {
+        // SECURITY: Don't expose internal error details in production
         console.error("Login Error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
 // --------------------------- REFRESH TOKEN -------------------------------
 exports.refreshToken = async (req, res) => {
-    const { token } = req.body;
+    // SECURITY: Accept token from cookie OR body for backward compatibility
+    const token = req.cookies?.refreshToken || req.body?.token;
 
     if (!token)
         return res.status(401).json({ error: "Refresh token required" });
 
+    // SECURITY: Hash the incoming token to compare with stored hash
+    const hashedToken = hashSensitiveData(token);
+
     const savedToken = await pool.query(
         "SELECT * FROM refresh_tokens WHERE token = $1",
-        [token]
+        [hashedToken]
     );
 
     if (savedToken.rows.length === 0)
@@ -248,7 +296,8 @@ exports.verifyToken = async (req, res) => {
 // ------------------------ LOGOUT ----------------------------
 exports.logout = async (req, res) => {
     try {
-        const { refreshToken } = req.body;
+        // SECURITY: Accept refresh token from cookie OR body for backward compatibility
+        const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
         const accessToken = req.headers.authorization?.split(" ")[1];
 
         if (!refreshToken) {
@@ -267,15 +316,26 @@ exports.logout = async (req, res) => {
                 }
             } catch (err) {
                 // Token already invalid/expired, no need to blacklist
-                console.log("Access token already invalid:", err.message);
+                // SECURITY: Don't log token details
             }
         }
 
-        // Delete the refresh token from DB
+        // SECURITY: Hash the refresh token to match stored hash
+        const hashedRefreshToken = hashSensitiveData(refreshToken);
+
+        // Delete the hashed refresh token from DB
         await pool.query(
             "DELETE FROM refresh_tokens WHERE token = $1",
-            [refreshToken]
+            [hashedRefreshToken]
         );
+
+        // SECURITY: Clear the HttpOnly cookie
+        res.clearCookie('refreshToken', {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: isProduction ? 'strict' : 'lax',
+            path: '/',
+        });
 
         return res.json({ message: "Logged out successfully" });
 
@@ -283,7 +343,7 @@ exports.logout = async (req, res) => {
         console.error("Logout error:", err);
         return res.status(500).json({
             error: "Server error",
-            details: err.message
+            details: sanitizeError(err)
         });
     }
 };
@@ -351,14 +411,18 @@ exports.requestOtp = async (req, res) => {
             const otp = generateOTP();
             const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
 
+            // SECURITY: Hash OTP before storing - never store plaintext OTPs
+            const hashedOtp = hashSensitiveData(otp);
+
             await pool.query(
                 `INSERT INTO phone_otps (phone, otp, expires_at)
                  VALUES ($1, $2, $3)`,
-                [formattedPhone, otp, expiresAt]
+                [formattedPhone, hashedOtp, expiresAt]
             );
 
-            // Log OTP for development debugging only
-            devLog(`Phone OTP for ${formattedPhone}`, otp);
+            // SECURITY: OTP is NOT logged - in dev mode, check database or use test OTP
+            // For development testing, you can temporarily enable this line:
+            // if (!isProduction) console.log(`[DEV ONLY] OTP: ${otp}`);
 
             res.json({
                 message: "OTP sent to your phone"
@@ -366,7 +430,7 @@ exports.requestOtp = async (req, res) => {
         }
 
     } catch (err) {
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -438,11 +502,14 @@ exports.verifyOtp = async (req, res) => {
             }
         } else {
             // Fallback: Check OTP from database
+            // SECURITY: Hash the incoming OTP to compare with stored hash
+            const hashedOtp = hashSensitiveData(otp);
+
             const otpCheck = await pool.query(
                 `SELECT * FROM phone_otps 
                  WHERE phone = $1 AND otp = $2 
                  ORDER BY created_at DESC LIMIT 1`,
-                [formattedPhone, otp]
+                [formattedPhone, hashedOtp]
             );
 
             if (otpCheck.rows.length === 0) {
@@ -470,9 +537,12 @@ exports.verifyOtp = async (req, res) => {
 
         const refreshToken = generateRefreshToken({ id: user.id });
 
+        // SECURITY: Hash refresh token before storing
+        const hashedRefreshToken = hashSensitiveData(refreshToken);
+
         await pool.query(
             "INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)",
-            [user.id, refreshToken]
+            [user.id, hashedRefreshToken]
         );
 
         // Update last_login
@@ -481,15 +551,19 @@ exports.verifyOtp = async (req, res) => {
             [user.id]
         );
 
+        // SECURITY: Set refresh token as HttpOnly cookie
+        res.cookie('refreshToken', refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+
         res.json({
             message: "OTP verified, login successful",
             token: accessToken,
+            // SECURITY: Also return refreshToken in body for backward compatibility
             refreshToken,
             user: mapUser(user)
         });
 
     } catch (err) {
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -515,7 +589,7 @@ exports.getProfile = async (req, res) => {
 
     } catch (err) {
         console.error("Get profile error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -597,7 +671,7 @@ exports.updateProfile = async (req, res) => {
 
     } catch (err) {
         console.error("Update profile error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -725,7 +799,7 @@ exports.changePassword = async (req, res) => {
 
     } catch (err) {
         console.error("Change password error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -756,16 +830,19 @@ exports.requestEmailVerification = async (req, res) => {
         // Generate 6-digit verification code (valid for ~1 hour via created_at)
         const verificationCode = generateOTP();
 
-        // Store code in DB for verification (no expiration needed - one-time use)
+        // SECURITY: Hash verification code before storing - never store plaintext codes
+        const hashedCode = hashSensitiveData(verificationCode);
+
+        // Store hashed code in DB for verification (no expiration needed - one-time use)
         await pool.query(
             `INSERT INTO email_verifications (user_id, email, token, created_at) 
              VALUES ($1, $2, $3, NOW()) 
              ON CONFLICT (user_id) DO UPDATE SET 
                token = $3, 
                created_at = NOW()`,
-            [req.user.id, email, verificationCode]
+            [req.user.id, email, hashedCode]
         );
-        devLog(`Stored verification code in DB for user ${req.user.id}`, email);
+        // SECURITY: No logging of verification codes
 
         // Send verification email with code (frontend expects 6-digit input)
         const emailSent = await sendVerificationEmail(email, verificationCode);
@@ -776,8 +853,7 @@ exports.requestEmailVerification = async (req, res) => {
             });
         }
 
-        // Log verification code for development debugging only
-        devLog(`Email verification code for ${email}`, verificationCode);
+        // SECURITY: Verification code is NOT logged
 
         res.json({
             message: "Verification code sent successfully. Please check your inbox."
@@ -785,7 +861,7 @@ exports.requestEmailVerification = async (req, res) => {
 
     } catch (err) {
         console.error("Request email verification error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -804,6 +880,9 @@ exports.verifyNewEmail = async (req, res) => {
             return res.status(401).json({ error: "Unauthorized" });
         }
 
+        // SECURITY: Hash incoming code to compare with stored hash
+        const hashedCode = hashSensitiveData(code);
+
         // Find and delete the verification code in one atomic operation
         // Enforce 60 minute expiry window to prevent reuse of stale codes
         const verification = await pool.query(
@@ -812,7 +891,7 @@ exports.verifyNewEmail = async (req, res) => {
                AND token = $2 
                AND created_at >= NOW() - INTERVAL '60 minutes'
              RETURNING email`,
-            [userId, code]
+            [userId, hashedCode]
         );
 
         if (verification.rows.length === 0) {
@@ -831,7 +910,7 @@ exports.verifyNewEmail = async (req, res) => {
 
     } catch (err) {
         console.error("Verify email error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -862,20 +941,24 @@ exports.forgotPassword = async (req, res) => {
         // Generate reset token
         const resetToken = require('crypto').randomBytes(32).toString('hex');
 
+        // SECURITY: Hash reset token before storing
+        const hashedResetToken = hashSensitiveData(resetToken);
+
         // Delete any existing reset tokens for this user
         await pool.query(
             "DELETE FROM password_resets WHERE user_id = $1",
             [user.id]
         );
 
-        // Store reset token (expires in 1 hour)
+        // Store hashed reset token (expires in 1 hour)
         await pool.query(
             `INSERT INTO password_resets (user_id, email, token, expires_at)
              VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')`,
-            [user.id, email, resetToken]
+            [user.id, email, hashedResetToken]
         );
 
         // Send email with reset link using proper email service
+        // Note: We send the ORIGINAL token to the user, not the hash
         const emailSent = await sendPasswordResetEmail(email, resetToken);
 
         if (!emailSent) {
@@ -884,6 +967,7 @@ exports.forgotPassword = async (req, res) => {
             });
         }
 
+        // SECURITY: Don't log the reset token, only confirmation
         console.log(`✅ Password reset email sent to ${email}`);
 
         res.json({ 
@@ -892,7 +976,7 @@ exports.forgotPassword = async (req, res) => {
 
     } catch (err) {
         console.error("Forgot password error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
 
@@ -913,11 +997,14 @@ exports.resetPassword = async (req, res) => {
             return res.status(400).json({ error: "Password must be at least 6 characters long" });
         }
 
-        // Find valid reset token
+        // SECURITY: Hash incoming token to compare with stored hash
+        const hashedToken = hashSensitiveData(token);
+
+        // Find valid reset token using hashed comparison
         const resetQuery = await pool.query(
             `SELECT * FROM password_resets 
              WHERE token = $1 AND email = $2 AND expires_at > NOW()`,
-            [token, email]
+            [hashedToken, email]
         );
 
         if (resetQuery.rows.length === 0) {
@@ -938,18 +1025,19 @@ exports.resetPassword = async (req, res) => {
             [hashedPassword, userId]
         );
 
-        // Delete used reset token
+        // SECURITY: Delete used reset token (single-use)
         await pool.query(
             "DELETE FROM password_resets WHERE id = $1",
             [resetRecord.id]
         );
 
-        console.log(`✅ Password reset successful for user ${userId}`);
+        // SECURITY: Don't log user ID in production
+        console.log(`✅ Password reset successful`);
 
         res.json({ message: "Password reset successfully. You can now login with your new password." });
 
     } catch (err) {
         console.error("Reset password error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
+        res.status(500).json({ error: "Server error", details: sanitizeError(err) });
     }
 };
