@@ -82,28 +82,6 @@ router.get("/", debtController.getDebts);
  *         description: Monthly debts due with summary
  */
 router.get("/monthly-due", debtController.getMonthlyDebtsDue);
-// Legacy/alternate path
-router.get("/monthly-due/list", debtController.getMonthlyDebtsDue);
-
-/**
- * @swagger
- * /api/debts/{id}:
- *   get:
- *     summary: Get debt details
- *     tags: [Debts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Debt details
- */
-router.get("/:id", debtController.getDebtDetails);
 
 /**
  * @swagger

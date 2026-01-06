@@ -58,25 +58,6 @@ router.post("/recurring", expenseController.addRecurringExpense);
 
 /**
  * @swagger
- * /api/expenses/recurring:
- *   get:
- *     summary: Get all recurring expense templates
- *     tags: [Expenses]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: is_active
- *         schema:
- *           type: boolean
- *     responses:
- *       200:
- *         description: List of recurring expenses
- */
-router.get("/recurring", expenseController.getRecurringExpenses);
-
-/**
- * @swagger
  * /api/expenses/recurring/{id}:
  *   put:
  *     summary: Update a recurring expense template
@@ -304,23 +285,5 @@ router.delete("/monthly/:id", expenseController.deleteMonthlyExpense);
  *         description: Expense marked as paid
  */
 router.post("/monthly/:id/mark-paid", expenseController.markExpensePaid);
-
-// =====================================================
-// UTILITY ROUTES
-// =====================================================
-
-/**
- * @swagger
- * /api/expenses/categories:
- *   get:
- *     summary: Get all unique expense categories
- *     tags: [Expenses]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of categories
- */
-router.get("/categories", expenseController.getExpenseCategories);
 
 module.exports = router;

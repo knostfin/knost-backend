@@ -84,7 +84,7 @@ module.exports.withTransaction = async (fn) => {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch {}
+    try { await client.query('ROLLBACK'); } catch { /* Ignore rollback errors */ }
     throw err;
   } finally {
     client.release();

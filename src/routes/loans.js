@@ -70,26 +70,6 @@ router.get("/", loanController.getLoans);
 /**
  * @swagger
  * /api/loans/{id}:
- *   get:
- *     summary: Get loan details with full payment schedule
- *     tags: [Loans]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Loan details with payment schedule
- */
-router.get("/:id", loanController.getLoanDetails);
-
-/**
- * @swagger
- * /api/loans/{id}:
  *   put:
  *     summary: Update loan details
  *     tags: [Loans]
@@ -162,31 +142,6 @@ router.delete("/:id", loanController.deleteLoan);
 router.post("/:id/close", loanController.closeLoan);
 
 // ---------------------- LOAN PAYMENT ROUTES -------------------------
-
-/**
- * @swagger
- * /api/loans/{id}/payments:
- *   get:
- *     summary: Get all payments for a loan
- *     tags: [Loans]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [pending, paid, overdue]
- *     responses:
- *       200:
- *         description: List of loan payments
- */
-router.get("/:id/payments", loanController.getLoanPayments);
 
 /**
  * @swagger

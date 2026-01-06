@@ -114,16 +114,6 @@ exports.getMonthlyOverview = async (req, res) => {
             [userId, month_year]
         );
 
-        // Get Investments made in this month
-        const investmentsResult = await pool.query(
-            `SELECT 
-                COUNT(*) as count,
-                SUM(amount) as total_amount
-             FROM investments 
-             WHERE user_id = $1 AND TO_CHAR(invested_on, 'YYYY-MM') = $2`,
-            [userId, month_year]
-        );
-
         const income = parseFloat(incomeResult.rows[0].total_income || 0);
         const expensesTotal = parseFloat(expensesResult.rows[0].total_amount || 0);
         const expensesPaid = parseFloat(expensesResult.rows[0].paid_amount || 0);
@@ -134,11 +124,10 @@ exports.getMonthlyOverview = async (req, res) => {
         const emisPending = parseFloat(emisResult.rows[0].pending_amount || 0);
         
         const debtsTotal = parseFloat(debtsResult.rows[0].total_amount || 0);
-        const investmentsTotal = parseFloat(investmentsResult.rows[0].total_amount || 0);
 
         const totalPaid = expensesPaid + emisPaid;
         const totalPending = expensesPending + emisPending;
-        const balance = income - totalPaid - investmentsTotal;
+        const balance = income - totalPaid;
 
         const overview = {
             month_year: month_year,
@@ -164,15 +153,10 @@ exports.getMonthlyOverview = async (req, res) => {
                 total: debtsTotal,
                 count: parseInt(debtsResult.rows[0].total_count || 0)
             },
-            investments: {
-                total: investmentsTotal,
-                count: parseInt(investmentsResult.rows[0].count || 0)
-            },
             summary: {
                 total_income: income,
                 total_paid: totalPaid,
                 total_pending: totalPending,
-                total_investments: investmentsTotal,
                 balance: balance,
                 is_cleared: totalPending === 0
             }
@@ -181,173 +165,6 @@ exports.getMonthlyOverview = async (req, res) => {
         res.json({ overview });
     } catch (err) {
         console.error("Get monthly overview error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
-// ---------------------- GET MULTI-MONTH VIEW -------------------------
-exports.getMultiMonthView = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { start_month, end_month } = req.query;
-
-        if (!start_month || !end_month) {
-            return res.status(400).json({ error: "start_month and end_month are required (format: YYYY-MM)" });
-        }
-
-        // Get income for each month
-        const incomeResult = await pool.query(
-            `SELECT 
-                month_year,
-                SUM(amount) as total_income,
-                COUNT(*) as count
-             FROM income 
-             WHERE user_id = $1 AND month_year BETWEEN $2 AND $3
-             GROUP BY month_year
-             ORDER BY month_year ASC`,
-            [userId, start_month, end_month]
-        );
-
-        // Get expenses for each month
-        const expensesResult = await pool.query(
-            `SELECT 
-                month_year,
-                SUM(amount) as total_expenses,
-                SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END) as paid,
-                SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END) as pending
-             FROM monthly_expenses 
-             WHERE user_id = $1 AND month_year BETWEEN $2 AND $3
-             GROUP BY month_year
-             ORDER BY month_year ASC`,
-            [userId, start_month, end_month]
-        );
-
-        // Get EMIs for each month
-        const emisResult = await pool.query(
-            `SELECT 
-                TO_CHAR(payment_date, 'YYYY-MM') as month_year,
-                SUM(emi_amount) as total_emis,
-                SUM(CASE WHEN status = 'paid' THEN emi_amount ELSE 0 END) as paid,
-                SUM(CASE WHEN status = 'pending' THEN emi_amount ELSE 0 END) as pending
-             FROM loan_payments 
-             WHERE user_id = $1 
-             AND TO_CHAR(payment_date, 'YYYY-MM') BETWEEN $2 AND $3
-             GROUP BY month_year
-             ORDER BY month_year ASC`,
-            [userId, start_month, end_month]
-        );
-
-        // Combine data month by month
-        const monthsData = {};
-        
-        // Generate all months in range
-        const startDate = new Date(start_month + '-01');
-        const endDate = new Date(end_month + '-01');
-        let currentDate = new Date(startDate);
-        
-        while (currentDate <= endDate) {
-            const monthKey = currentDate.toISOString().slice(0, 7);
-            monthsData[monthKey] = {
-                month_year: monthKey,
-                income: 0,
-                expenses: 0,
-                emis: 0,
-                balance: 0
-            };
-            currentDate.setMonth(currentDate.getMonth() + 1);
-        }
-
-        // Fill in income data
-        incomeResult.rows.forEach(row => {
-            if (monthsData[row.month_year]) {
-                monthsData[row.month_year].income = parseFloat(row.total_income || 0);
-            }
-        });
-
-        // Fill in expenses data
-        expensesResult.rows.forEach(row => {
-            if (monthsData[row.month_year]) {
-                monthsData[row.month_year].expenses = parseFloat(row.total_expenses || 0);
-            }
-        });
-
-        // Fill in EMIs data
-        emisResult.rows.forEach(row => {
-            if (monthsData[row.month_year]) {
-                monthsData[row.month_year].emis = parseFloat(row.total_emis || 0);
-            }
-        });
-
-        // Calculate balance for each month
-        Object.keys(monthsData).forEach(month => {
-            const data = monthsData[month];
-            data.balance = data.income - data.expenses - data.emis;
-        });
-
-        const monthsArray = Object.values(monthsData).sort((a, b) => 
-            a.month_year.localeCompare(b.month_year)
-        );
-
-        res.json({ months: monthsArray });
-    } catch (err) {
-        console.error("Get multi-month view error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
-// ---------------------- GET MONTHLY STATUS -------------------------
-exports.getMonthlyStatus = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { month_year } = req.params;
-
-        if (!month_year || !/^\d{4}-\d{2}$/.test(month_year)) {
-            return res.status(400).json({ error: "Invalid month_year format. Use YYYY-MM" });
-        }
-
-        // Check pending expenses
-        const expensesPending = await pool.query(
-            `SELECT COUNT(*) as count FROM monthly_expenses 
-             WHERE user_id = $1 AND month_year = $2 AND status = 'pending'`,
-            [userId, month_year]
-        );
-
-        // Check pending EMIs
-        const emisPending = await pool.query(
-            `SELECT COUNT(*) as count FROM loan_payments 
-             WHERE user_id = $1 
-             AND TO_CHAR(payment_date, 'YYYY-MM') = $2 
-             AND status = 'pending'`,
-            [userId, month_year]
-        );
-
-        // Check unpaid debts
-        const debtsPending = await pool.query(
-            `SELECT COUNT(*) as count FROM debts 
-             WHERE user_id = $1 
-             AND TO_CHAR(due_date, 'YYYY-MM') = $2 
-             AND status != 'paid'`,
-            [userId, month_year]
-        );
-
-        const totalPending = parseInt(expensesPending.rows[0].count || 0) +
-                           parseInt(emisPending.rows[0].count || 0) +
-                           parseInt(debtsPending.rows[0].count || 0);
-
-        const status = {
-            month_year: month_year,
-            is_cleared: totalPending === 0,
-            pending_items: totalPending,
-            details: {
-                pending_expenses: parseInt(expensesPending.rows[0].count || 0),
-                pending_emis: parseInt(emisPending.rows[0].count || 0),
-                pending_debts: parseInt(debtsPending.rows[0].count || 0)
-            }
-        };
-
-        res.json({ status });
-    } catch (err) {
-        console.error("Get monthly status error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
     }
 };
@@ -398,21 +215,12 @@ exports.getAllTransactionsForMonth = async (req, res) => {
             [userId, month_year]
         );
 
-        // Get investments made in this month
-        const investments = await pool.query(
-            `SELECT id, name, amount, invested_on as date, 'investment' as type, 
-                    investment_type, status, created_at
-             FROM investments WHERE user_id = $1 AND TO_CHAR(invested_on, 'YYYY-MM') = $2`,
-            [userId, month_year]
-        );
-
         // Combine all transactions
         const allTransactions = [
             ...income.rows,
             ...expenses.rows,
             ...emis.rows,
-            ...debts.rows,
-            ...investments.rows
+            ...debts.rows
         ].sort((a, b) => {
             const dateA = new Date(a.date || a.created_at);
             const dateB = new Date(b.date || b.created_at);
@@ -426,70 +234,6 @@ exports.getAllTransactionsForMonth = async (req, res) => {
         });
     } catch (err) {
         console.error("Get all transactions for month error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
-// ---------------------- GET YEAR SUMMARY -------------------------
-exports.getYearSummary = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { year } = req.params;
-
-        if (!year || !/^\d{4}$/.test(year)) {
-            return res.status(400).json({ error: "Invalid year format. Use YYYY" });
-        }
-
-        // Get yearly income
-        const incomeResult = await pool.query(
-            `SELECT SUM(amount) as total FROM income 
-             WHERE user_id = $1 AND month_year LIKE $2`,
-            [userId, `${year}-%`]
-        );
-
-        // Get yearly expenses
-        const expensesResult = await pool.query(
-            `SELECT SUM(amount) as total FROM monthly_expenses 
-             WHERE user_id = $1 AND month_year LIKE $2`,
-            [userId, `${year}-%`]
-        );
-
-        // Get yearly EMIs paid
-        const emisResult = await pool.query(
-            `SELECT SUM(emi_amount) as total FROM loan_payments 
-             WHERE user_id = $1 AND TO_CHAR(payment_date, 'YYYY') = $2`,
-            [userId, year]
-        );
-
-        // Get yearly investments
-        const investmentsResult = await pool.query(
-            `SELECT SUM(amount) as total FROM investments 
-             WHERE user_id = $1 AND TO_CHAR(invested_on, 'YYYY') = $2`,
-            [userId, year]
-        );
-
-        // Get active loans count
-        const loansResult = await pool.query(
-            `SELECT COUNT(*) as count FROM loans 
-             WHERE user_id = $1 AND status = 'active'`,
-            [userId]
-        );
-
-        const summary = {
-            year: year,
-            total_income: parseFloat(incomeResult.rows[0].total || 0),
-            total_expenses: parseFloat(expensesResult.rows[0].total || 0),
-            total_emis: parseFloat(emisResult.rows[0].total || 0),
-            total_investments: parseFloat(investmentsResult.rows[0].total || 0),
-            active_loans: parseInt(loansResult.rows[0].count || 0),
-            net_savings: parseFloat(incomeResult.rows[0].total || 0) - 
-                        parseFloat(expensesResult.rows[0].total || 0) - 
-                        parseFloat(emisResult.rows[0].total || 0)
-        };
-
-        res.json({ summary });
-    } catch (err) {
-        console.error("Get year summary error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
     }
 };
@@ -658,198 +402,6 @@ exports.getHistoricalTrends = async (req, res) => {
     }
 };
 
-// ---------------------- GET SUMMARY STATISTICS -------------------------
-exports.getSummaryStatistics = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { month_year } = req.params;
-
-        if (!month_year || !/^\d{4}-\d{2}$/.test(month_year)) {
-            return res.status(400).json({ error: "Invalid month_year format. Use YYYY-MM" });
-        }
-
-        // Get income data
-        const incomeData = await pool.query(
-            `SELECT 
-                SUM(amount) as total,
-                COUNT(*) as count,
-                AVG(amount) as average
-             FROM income 
-             WHERE user_id = $1 AND month_year = $2`,
-            [userId, month_year]
-        );
-
-        // Get expenses data
-        const expensesData = await pool.query(
-            `SELECT 
-                SUM(amount) as total,
-                COUNT(*) as count,
-                AVG(amount) as average,
-                SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END) as paid_total
-             FROM monthly_expenses 
-             WHERE user_id = $1 AND month_year = $2`,
-            [userId, month_year]
-        );
-
-        // Get EMIs data
-        const emisData = await pool.query(
-            `SELECT 
-                SUM(emi_amount) as total,
-                COUNT(*) as count,
-                AVG(emi_amount) as average,
-                SUM(CASE WHEN status = 'paid' THEN emi_amount ELSE 0 END) as paid_total
-             FROM loan_payments 
-             WHERE user_id = $1 AND TO_CHAR(payment_date, 'YYYY-MM') = $2`,
-            [userId, month_year]
-        );
-
-        // Get debts data
-        const debtsData = await pool.query(
-            `SELECT 
-                SUM(total_amount - COALESCE(amount_paid, 0)) as total,
-                COUNT(*) as count
-             FROM debts 
-             WHERE user_id = $1 
-             AND TO_CHAR(due_date, 'YYYY-MM') = $2
-             AND status != 'paid'`,
-            [userId, month_year]
-        );
-
-        // Get investments data
-        const investmentsData = await pool.query(
-            `SELECT 
-                SUM(amount) as total,
-                COUNT(*) as count
-             FROM investments 
-             WHERE user_id = $1 AND TO_CHAR(invested_on, 'YYYY-MM') = $2`,
-            [userId, month_year]
-        );
-
-        const totalIncome = parseFloat(incomeData.rows[0].total || 0);
-        const totalExpenses = parseFloat(expensesData.rows[0].total || 0);
-        const totalEmis = parseFloat(emisData.rows[0].total || 0);
-        const totalDebts = parseFloat(debtsData.rows[0].total || 0);
-        const totalInvestments = parseFloat(investmentsData.rows[0].total || 0);
-
-        const balance = totalIncome - totalExpenses - totalEmis;
-        const savingsRate = totalIncome > 0 ? ((balance / totalIncome) * 100).toFixed(2) : 0;
-
-        const statistics = {
-            month_year: month_year,
-            income: {
-                total: totalIncome,
-                count: parseInt(incomeData.rows[0].count) || 0,
-                average: parseFloat(incomeData.rows[0].average) || 0
-            },
-            expenses: {
-                total: totalExpenses,
-                count: parseInt(expensesData.rows[0].count) || 0,
-                average: parseFloat(expensesData.rows[0].average) || 0,
-                paid_amount: parseFloat(expensesData.rows[0].paid_total) || 0
-            },
-            emis: {
-                total: totalEmis,
-                count: parseInt(emisData.rows[0].count) || 0,
-                average: parseFloat(emisData.rows[0].average) || 0,
-                paid_amount: parseFloat(emisData.rows[0].paid_total) || 0
-            },
-            debts: {
-                total: totalDebts,
-                count: parseInt(debtsData.rows[0].count) || 0
-            },
-            investments: {
-                total: totalInvestments,
-                count: parseInt(investmentsData.rows[0].count) || 0
-            },
-            summary: {
-                total_income: totalIncome,
-                total_expenses: totalExpenses,
-                total_emis: totalEmis,
-                total_debts: totalDebts,
-                total_investments: totalInvestments,
-                balance: balance,
-                savings_rate_percent: parseFloat(savingsRate)
-            }
-        };
-
-        res.json({ statistics });
-    } catch (err) {
-        console.error("Get summary statistics error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
-// ---------------------- GET EMI CALCULATION ENDPOINT -------------------------
-exports.calculateEMI = async (req, res) => {
-    try {
-        const { principal_amount, annual_interest_rate, tenure_months } = req.body;
-
-        // Validation
-        if (!principal_amount || !annual_interest_rate || !tenure_months) {
-            return res.status(400).json({
-                error: "principal_amount, annual_interest_rate, and tenure_months are required"
-            });
-        }
-
-        const P = parseFloat(principal_amount);
-        const R = parseFloat(annual_interest_rate);
-        const N = parseInt(tenure_months);
-
-        if (P <= 0 || R < 0 || N <= 0) {
-            return res.status(400).json({
-                error: "principal_amount and tenure_months must be positive, interest_rate must be non-negative"
-            });
-        }
-
-        // Calculate EMI
-        let emiAmount;
-        if (R === 0) {
-            emiAmount = P / N;
-        } else {
-            const monthlyRate = R / (12 * 100);
-            const numerator = P * monthlyRate * Math.pow(1 + monthlyRate, N);
-            const denominator = Math.pow(1 + monthlyRate, N) - 1;
-            emiAmount = numerator / denominator;
-        }
-
-        // Generate payment schedule
-        const schedule = [];
-        let outstandingBalance = P;
-        const monthlyRate = R / (12 * 100);
-
-        for (let i = 1; i <= N; i++) {
-            const interestPaid = outstandingBalance * monthlyRate;
-            const principalPaid = emiAmount - interestPaid;
-            outstandingBalance -= principalPaid;
-
-            schedule.push({
-                payment_number: i,
-                emi_amount: parseFloat(emiAmount.toFixed(2)),
-                principal_paid: parseFloat(principalPaid.toFixed(2)),
-                interest_paid: parseFloat(interestPaid.toFixed(2)),
-                outstanding_balance: parseFloat(Math.max(0, outstandingBalance).toFixed(2))
-            });
-        }
-
-        const totalInterest = schedule.reduce((sum, p) => sum + p.interest_paid, 0);
-
-        res.json({
-            calculation: {
-                principal_amount: P,
-                annual_interest_rate: R,
-                tenure_months: N,
-                monthly_emi: parseFloat(emiAmount.toFixed(2)),
-                total_interest: parseFloat(totalInterest.toFixed(2)),
-                total_amount_payable: parseFloat((P + totalInterest).toFixed(2))
-            },
-            payment_schedule: schedule
-        });
-    } catch (err) {
-        console.error("Calculate EMI error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
 // ---------------------- GET LOAN PAYMENT SUMMARY -------------------------
 exports.getLoanPaymentSummary = async (req, res) => {
     try {
@@ -943,7 +495,7 @@ exports.downloadMonthlyReport = async (req, res) => {
 
         // Optimized single-query overview totals
         const overviewQuery = `
-          SELECT 
+          SELECT
             (SELECT COALESCE(SUM(amount), 0) FROM income WHERE user_id = $1 AND month_year = $2) as total_income,
             (SELECT COALESCE(SUM(amount), 0) FROM monthly_expenses WHERE user_id = $1 AND month_year = $2) as total_expenses,
             (SELECT COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0) FROM monthly_expenses WHERE user_id = $1 AND month_year = $2) as total_paid,

@@ -106,18 +106,7 @@ function cleanupExpiredTokens() {
 // Run cleanup every 5 minutes for in-memory storage
 setInterval(cleanupExpiredTokens, 5 * 60 * 1000);
 
-/**
- * Graceful shutdown
- */
-async function disconnect() {
-    if (redisClient) {
-        await redisClient.quit();
-    }
-    inMemoryBlacklist.clear();
-}
-
 module.exports = {
     blacklistToken,
-    isTokenBlacklisted,
-    disconnect,
+    isTokenBlacklisted
 };

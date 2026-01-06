@@ -105,26 +105,7 @@ function formatPhoneFromParts(countryCode, number) {
     };
 }
 
-/**
- * Extracts country code and number from combined phone
- * @param {string} phone - Combined phone number (+{countrycode}{number})
- * @returns {Object} - { countryCode: string, number: string } or null if invalid
- */
-function parsePhoneNumber(phone) {
-    const validation = validatePhoneNumber(phone);
-    if (!validation.valid) {
-        return null;
-    }
-
-    return {
-        countryCode: validation.countryCode,
-        number: validation.number,
-        formatted: validation.formatted
-    };
-}
-
 module.exports = {
     validatePhoneNumber,
-    formatPhoneFromParts,
-    parsePhoneNumber
+    formatPhoneFromParts
 };

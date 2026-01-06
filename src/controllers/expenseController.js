@@ -45,32 +45,6 @@ exports.addRecurringExpense = async (req, res) => {
     }
 };
 
-// ---------------------- GET RECURRING EXPENSES -------------------------
-exports.getRecurringExpenses = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { is_active } = req.query;
-
-        let query = "SELECT * FROM recurring_expenses WHERE user_id = $1";
-        const params = [userId];
-
-        if (is_active !== undefined) {
-            query += " AND is_active = $2";
-            params.push(is_active === 'true');
-        }
-
-        query += " ORDER BY category ASC";
-
-        const result = await pool.query(query, params);
-        const formatted = pool.formatRows(result.rows);
-
-        res.json({ recurring_expenses: formatted });
-    } catch (err) {
-        console.error("Get recurring expenses error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
 // ---------------------- UPDATE RECURRING EXPENSE -------------------------
 exports.updateRecurringExpense = async (req, res) => {
     try {
@@ -477,29 +451,6 @@ exports.deleteMonthlyExpense = async (req, res) => {
         res.json({ message: "Monthly expense deleted successfully" });
     } catch (err) {
         console.error("Delete monthly expense error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
-// ---------------------- GET EXPENSE CATEGORIES -------------------------
-exports.getExpenseCategories = async (req, res) => {
-    try {
-        const userId = req.user.id;
-
-        // Get unique categories from both recurring and monthly expenses
-        const result = await pool.query(
-            `SELECT DISTINCT category FROM (
-                SELECT category FROM recurring_expenses WHERE user_id = $1
-                UNION
-                SELECT category FROM monthly_expenses WHERE user_id = $1
-            ) AS categories
-            ORDER BY category ASC`,
-            [userId]
-        );
-
-        res.json({ categories: result.rows.map(r => r.category) });
-    } catch (err) {
-        console.error("Get expense categories error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
     }
 };

@@ -43,23 +43,6 @@ const options = {
           },
         },
 
-        // ==================== FINANCE SCHEMAS ====================
-        Transaction: {
-          type: "object",
-          properties: {
-            id: { type: "string", format: "uuid" },
-            user_id: { type: "string", format: "uuid" },
-            type: { type: "string", enum: ["income", "expense", "debt"] },
-            category: { type: "string" },
-            amount: { type: "number", format: "float" },
-            description: { type: "string" },
-            date: { type: "string", format: "date" },
-            paymentMethod: { type: "string", enum: ["cash", "card", "bank_transfer", "upi", "other"] },
-            created_at: { type: "string", format: "date-time" },
-            updated_at: { type: "string", format: "date-time" },
-          },
-        },
-
         // ==================== LOANS SCHEMAS ====================
         Loan: {
           type: "object",
@@ -163,29 +146,6 @@ const options = {
             description: { type: "string" },
             month_year: { type: "string", format: "date", description: "Format: YYYY-MM" },
             received_on: { type: "string", format: "date" },
-            created_at: { type: "string", format: "date-time" },
-            updated_at: { type: "string", format: "date-time" },
-          },
-        },
-
-        // ==================== INVESTMENTS SCHEMAS ====================
-        Investment: {
-          type: "object",
-          properties: {
-            id: { type: "string", format: "uuid" },
-            user_id: { type: "string", format: "uuid" },
-            investment_type: { 
-              type: "string", 
-              enum: ["mutual_fund", "stocks", "savings", "fd", "ppf", "gold", "real_estate", "crypto", "other"]
-            },
-            name: { type: "string", description: "Investment name/description" },
-            amount: { type: "number", format: "float", description: "Invested amount" },
-            current_value: { type: "number", format: "float", nullable: true },
-            returns: { type: "number", format: "float", nullable: true, description: "Current profit/loss" },
-            invested_on: { type: "string", format: "date" },
-            maturity_date: { type: "string", format: "date", nullable: true },
-            notes: { type: "string" },
-            status: { type: "string", enum: ["active", "matured", "sold"] },
             created_at: { type: "string", format: "date-time" },
             updated_at: { type: "string", format: "date-time" },
           },

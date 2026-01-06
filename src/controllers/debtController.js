@@ -1,5 +1,41 @@
 const pool = require("../db");
 
+// Helper function to insert debt payment into monthly expenses
+const insertDebtPaymentExpense = async (client, userId, debtId, debtName, amountPaid) => {
+    try {
+        const now = new Date();
+        const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const paidOn = now.toISOString();
+        
+        const result = await client.query(
+            `INSERT INTO monthly_expenses 
+             (user_id, debt_id, category, amount, description, payment_method, month_year, due_date, status, paid_on)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING id`,
+            [
+                userId,
+                debtId,
+                `Debt - ${debtName}`,
+                amountPaid,
+                `Debt Payment - ${debtName}`,
+                'bank_transfer',
+                monthYear,
+                now.toISOString().split('T')[0],
+                'paid',
+                paidOn
+            ]
+        );
+        
+        if (result.rows.length > 0) {
+            console.log(`Inserted debt payment expense for debt ${debtId}, amount: ${amountPaid}`);
+        }
+        return result.rows[0]?.id;
+    } catch (err) {
+        console.error("Error inserting debt payment expense:", err);
+        throw err;
+    }
+};
+
 // ---------------------- ADD DEBT -------------------------
 exports.addDebt = async (req, res) => {
     try {
@@ -61,34 +97,6 @@ exports.getDebts = async (req, res) => {
     }
 };
 
-// ---------------------- GET DEBT DETAILS -------------------------
-exports.getDebtDetails = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { id } = req.params;
-        const debtId = parseInt(id, 10);
-
-        if (Number.isNaN(debtId)) {
-            return res.status(400).json({ error: "Invalid debt id" });
-        }
-
-        const result = await pool.query(
-            "SELECT * FROM debts WHERE id = $1 AND user_id = $2",
-            [debtId, userId]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: "Debt not found" });
-        }
-
-        const formatted = pool.formatRows([result.rows[0]])[0];
-        res.json({ debt: formatted });
-    } catch (err) {
-        console.error("Get debt details error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
 // ---------------------- UPDATE DEBT -------------------------
 exports.updateDebt = async (req, res) => {
     try {
@@ -136,6 +144,7 @@ exports.updateDebt = async (req, res) => {
 
 // ---------------------- MARK DEBT AS PAID -------------------------
 exports.markDebtPaid = async (req, res) => {
+    const client = await pool.connect();
     try {
         const userId = req.user.id;
         const { id } = req.params;
@@ -147,7 +156,7 @@ exports.markDebtPaid = async (req, res) => {
         }
 
         // Get current debt
-        const debtQuery = await pool.query(
+        const debtQuery = await client.query(
             "SELECT * FROM debts WHERE id = $1 AND user_id = $2",
             [debtId, userId]
         );
@@ -162,24 +171,30 @@ exports.markDebtPaid = async (req, res) => {
         
         let newAmountPaid = currentPaid;
         let newStatus = debt.status;
+        let paymentAmount = 0; // Amount being paid in this transaction
 
         if (amount_paid !== undefined) {
             // Partial payment
-            newAmountPaid = currentPaid + parseFloat(amount_paid);
+            paymentAmount = parseFloat(amount_paid);
+            newAmountPaid = currentPaid + paymentAmount;
             
             if (newAmountPaid >= totalAmount) {
                 newStatus = 'paid';
+                paymentAmount = totalAmount - currentPaid; // Adjust to not overpay
                 newAmountPaid = totalAmount;
             } else {
                 newStatus = 'partially_paid';
             }
         } else {
             // Mark as fully paid
+            paymentAmount = totalAmount - currentPaid;
             newAmountPaid = totalAmount;
             newStatus = 'paid';
         }
 
-        const result = await pool.query(
+        await client.query('BEGIN');
+
+        const result = await client.query(
             `UPDATE debts 
              SET amount_paid = $1, status = $2, updated_at = NOW()
              WHERE id = $3 AND user_id = $4
@@ -187,13 +202,24 @@ exports.markDebtPaid = async (req, res) => {
             [newAmountPaid, newStatus, debtId, userId]
         );
 
+        // Insert debt payment into monthly expenses
+        if (paymentAmount > 0) {
+            await insertDebtPaymentExpense(client, userId, debtId, debt.debt_name, paymentAmount);
+        }
+
+        await client.query('COMMIT');
+
         res.json({
             message: newStatus === 'paid' ? "Debt marked as fully paid" : "Partial payment recorded",
-            debt: result.rows[0]
+            debt: result.rows[0],
+            expense_recorded: paymentAmount > 0
         });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error("Mark debt paid error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
+    } finally {
+        client.release();
     }
 };
 

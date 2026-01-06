@@ -7,12 +7,10 @@ const rateLimit = require("express-rate-limit");
 const path = require("path");
 
 const authRoutes = require("./routes/auth");
-const financeRoutes = require("./routes/finance");
 const loanRoutes = require("./routes/loans");
 const debtRoutes = require("./routes/debts");
 const expenseRoutes = require("./routes/expenses");
 const incomeRoutes = require("./routes/income");
-const investmentRoutes = require("./routes/investments");
 const dashboardRoutes = require("./routes/dashboard");
 const categoryRoutes = require("./routes/categories");
 const errorHandler = require("./middlewares/errorHandler");
@@ -154,14 +152,12 @@ app.use(securityResponseChecker);
    1️⃣1️⃣ ROUTES
 ------------------------------------------------------------------- */
 app.use("/api/auth", authRoutes);
-app.use("/api/finance", financeRoutes); // Keep for backward compatibility
 
-// New Finance Management Routes
+// Finance Management Routes
 app.use("/api/loans", loanRoutes);
 app.use("/api/debts", debtRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/income", incomeRoutes);
-app.use("/api/investments", investmentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/categories", categoryRoutes);
 
