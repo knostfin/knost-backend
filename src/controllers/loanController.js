@@ -21,18 +21,23 @@ const generatePaymentSchedule = (loanId, userId, principal, annualRate, tenureMo
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Reset to start of day for comparison
     
+    // Get current month for comparison (current month EMI should be pending)
+    const currentMonth = today.getFullYear() * 12 + today.getMonth();
+    
     for (let i = 1; i <= tenureMonths; i++) {
         const interestPaid = outstandingBalance * monthlyRate;
         const principalPaid = parseFloat(emiAmount) - interestPaid;
         outstandingBalance -= principalPaid;
         
-        // Calculate payment date (add i months to start date)
+        // Calculate payment date: first EMI is on start_date, subsequent ones are monthly
         const paymentDate = new Date(startDate);
-        paymentDate.setMonth(paymentDate.getMonth() + i);
+        paymentDate.setMonth(paymentDate.getMonth() + (i - 1)); // Fix: i-1 so first EMI is on start_date
         const paymentDateStr = paymentDate.toISOString().split('T')[0];
         
-        // Auto-mark as paid if payment date is before today
-        const isPast = paymentDate < today;
+        // Auto-mark as paid only if payment month is BEFORE current month
+        // Current month's EMI should remain pending (user needs to pay it this month)
+        const paymentMonth = paymentDate.getFullYear() * 12 + paymentDate.getMonth();
+        const isPast = paymentMonth < currentMonth;
         
         payments.push({
             loan_id: loanId,
