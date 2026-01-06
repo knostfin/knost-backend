@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser"); // SECURITY: For HttpOnly refresh token cookies
 const pool = require("./db");
 const helmet = require("helmet");
 const morgan = require("morgan");
@@ -129,6 +130,11 @@ app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
    9️⃣ BODY PARSER
 ------------------------------------------------------------------- */
 app.use(express.json());
+
+/* ------------------------------------------------------------------
+   9️⃣.0️⃣5️⃣ COOKIE PARSER (SECURITY: For HttpOnly refresh tokens)
+------------------------------------------------------------------- */
+app.use(cookieParser());
 
 /* ------------------------------------------------------------------
    9️⃣.1️⃣ API CACHE-CONTROL HEADERS (PERFORMANCE)
