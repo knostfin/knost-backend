@@ -78,26 +78,6 @@ router.get("/", incomeController.getIncome);
 /**
  * @swagger
  * /api/income/{id}:
- *   get:
- *     summary: Get income details
- *     tags: [Income]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Income details
- */
-router.get("/:id", incomeController.getIncomeDetails);
-
-/**
- * @swagger
- * /api/income/{id}:
  *   put:
  *     summary: Update income
  *     tags: [Income]
@@ -150,19 +130,5 @@ router.put("/:id", incomeController.updateIncome);
  *         description: Income deleted successfully
  */
 router.delete("/:id", incomeController.deleteIncome);
-
-/**
- * @swagger
- * /api/income/sources/list:
- *   get:
- *     summary: Get all unique income sources
- *     tags: [Income]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of income sources
- */
-router.get("/sources/list", incomeController.getIncomeSources);
 
 module.exports = router;

@@ -31,54 +31,6 @@ router.get("/monthly/:month_year", dashboardController.getMonthlyOverview);
 
 /**
  * @swagger
- * /api/dashboard/range:
- *   get:
- *     summary: Get multi-month comparison view
- *     tags: [Dashboard]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: start_month
- *         required: true
- *         schema:
- *           type: string
- *         description: Format YYYY-MM
- *       - in: query
- *         name: end_month
- *         required: true
- *         schema:
- *           type: string
- *         description: Format YYYY-MM
- *     responses:
- *       200:
- *         description: Multi-month financial data
- */
-router.get("/range", dashboardController.getMultiMonthView);
-
-/**
- * @swagger
- * /api/dashboard/status/{month_year}:
- *   get:
- *     summary: Get monthly payment status (cleared or pending)
- *     tags: [Dashboard]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: month_year
- *         required: true
- *         schema:
- *           type: string
- *         description: Format YYYY-MM
- *     responses:
- *       200:
- *         description: Monthly status with pending items count
- */
-router.get("/status/:month_year", dashboardController.getMonthlyStatus);
-
-/**
- * @swagger
  * /api/dashboard/transactions/{month_year}:
  *   get:
  *     summary: Get all financial activities for a month
@@ -94,30 +46,9 @@ router.get("/status/:month_year", dashboardController.getMonthlyStatus);
  *         description: Format YYYY-MM
  *     responses:
  *       200:
- *         description: All transactions including income, expenses, EMIs, debts, investments
+ *         description: All transactions including income, expenses, EMIs, debts
  */
 router.get("/transactions/:month_year", dashboardController.getAllTransactionsForMonth);
-
-/**
- * @swagger
- * /api/dashboard/year/{year}:
- *   get:
- *     summary: Get yearly financial summary
- *     tags: [Dashboard]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: year
- *         required: true
- *         schema:
- *           type: string
- *         description: Format YYYY
- *     responses:
- *       200:
- *         description: Annual financial summary
- */
-router.get("/year/:year", dashboardController.getYearSummary);
 
 /**
  * @swagger
@@ -160,64 +91,6 @@ router.get("/category-breakdown/:month_year", dashboardController.getExpenseCate
  *         description: Historical trends with income, expenses, EMIs, balance, and savings rate
  */
 router.get("/trends", dashboardController.getHistoricalTrends);
-
-/**
- * @swagger
- * /api/dashboard/summary/{month_year}:
- *   get:
- *     summary: Get detailed summary statistics for a month
- *     tags: [Dashboard]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: month_year
- *         required: true
- *         schema:
- *           type: string
- *         description: Format YYYY-MM
- *     responses:
- *       200:
- *         description: Detailed statistics including averages and totals
- */
-router.get("/summary/:month_year", dashboardController.getSummaryStatistics);
-
-/**
- * @swagger
- * /api/dashboard/calculate-emi:
- *   post:
- *     summary: Calculate EMI amount for a loan
- *     tags: [Dashboard]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - principal_amount
- *               - annual_interest_rate
- *               - tenure_months
- *             properties:
- *               principal_amount:
- *                 type: number
- *                 example: 500000
- *                 description: Loan principal amount
- *               annual_interest_rate:
- *                 type: number
- *                 example: 8.5
- *                 description: Annual interest rate as percentage (e.g., 8.5 for 8.5%)
- *               tenure_months:
- *                 type: integer
- *                 example: 60
- *                 description: Loan tenure in months
- *     responses:
- *       200:
- *         description: EMI calculation with payment schedule
- */
-router.post("/calculate-emi", dashboardController.calculateEMI);
 
 /**
  * @swagger

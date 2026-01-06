@@ -99,7 +99,6 @@ function startCleanupJob() {
 
 module.exports = {
     cleanupExpiredRefreshTokens,
-    cleanupOldRefreshTokens,
-    startCleanupJob,
-    warmUpDatabase,
+    cleanupOldRefreshTokens,  // Alternative cleanup method - can be used instead of cleanupExpiredRefreshTokens
+    startCleanupJob
 };

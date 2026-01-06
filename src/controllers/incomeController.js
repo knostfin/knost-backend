@@ -88,29 +88,6 @@ exports.getIncome = async (req, res) => {
     }
 };
 
-// ---------------------- GET INCOME DETAILS -------------------------
-exports.getIncomeDetails = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { id } = req.params;
-
-        const result = await pool.query(
-            "SELECT * FROM income WHERE id = $1 AND user_id = $2",
-            [id, userId]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: "Income not found" });
-        }
-
-        const formatted = pool.formatRows([result.rows[0]])[0];
-        res.json({ income: formatted });
-    } catch (err) {
-        console.error("Get income details error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
 // ---------------------- UPDATE INCOME -------------------------
 exports.updateIncome = async (req, res) => {
     try {
@@ -169,26 +146,6 @@ exports.deleteIncome = async (req, res) => {
         res.json({ message: "Income deleted successfully" });
     } catch (err) {
         console.error("Delete income error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
-// ---------------------- GET INCOME SOURCES -------------------------
-exports.getIncomeSources = async (req, res) => {
-    try {
-        const userId = req.user.id;
-
-        // Get unique income sources
-        const result = await pool.query(
-            `SELECT DISTINCT source FROM income 
-             WHERE user_id = $1 
-             ORDER BY source ASC`,
-            [userId]
-        );
-
-        res.json({ sources: result.rows.map(r => r.source) });
-    } catch (err) {
-        console.error("Get income sources error:", err);
         res.status(500).json({ error: "Server error", details: err.message });
     }
 };

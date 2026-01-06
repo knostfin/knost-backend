@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 const pool = require("../db");
 const { sendVerificationEmail, sendPasswordResetEmail } = require("../services/emailService");
 const { blacklistToken } = require("../services/tokenBlacklistService");
-const { sanitizeUser, devLog } = require("../utils/security");
+const { devLog } = require("../utils/security");
 const { uploadToCloudinary, deleteFromCloudinary } = require("../services/cloudinaryService");
 const { validatePhoneNumber, formatPhoneFromParts } = require("../utils/phoneValidator");
 
@@ -765,7 +765,7 @@ exports.requestEmailVerification = async (req, res) => {
                created_at = NOW()`,
             [req.user.id, email, verificationCode]
         );
-        console.log(`Stored verification code in DB for user ${req.user.id}, email: ${email}`);
+        devLog(`Stored verification code in DB for user ${req.user.id}`, email);
 
         // Send verification email with code (frontend expects 6-digit input)
         const emailSent = await sendVerificationEmail(email, verificationCode);

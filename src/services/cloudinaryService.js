@@ -18,7 +18,7 @@ if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !pr
 // Test Cloudinary credentials on startup
 async function testCloudinaryConnection() {
     try {
-        const result = await cloudinary.api.ping();
+        await cloudinary.api.ping();
         return true;
     } catch (error) {
         console.error('Cloudinary connection test FAILED:', error.message);
@@ -118,28 +118,7 @@ async function deleteFromCloudinary(publicId) {
     }
 }
 
-/**
- * Get optimized image URL with transformations
- * @param {string} publicId - Public ID of the image
- * @param {Object} options - Transformation options
- * @returns {string} - Optimized image URL
- */
-function getOptimizedUrl(publicId, options = {}) {
-    const defaultOptions = {
-        fetch_format: 'auto',
-        quality: 'auto',
-        width: options.width || 300,
-        height: options.height || 300,
-        crop: options.crop || 'fill',
-        gravity: options.gravity || 'face'
-    };
-
-    return cloudinary.url(publicId, defaultOptions);
-}
-
 module.exports = {
     uploadToCloudinary,
-    deleteFromCloudinary,
-    getOptimizedUrl,
-    cloudinary
+    deleteFromCloudinary
 };

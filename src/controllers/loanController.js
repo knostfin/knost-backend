@@ -56,7 +56,7 @@ const generatePaymentSchedule = (loanId, userId, principal, annualRate, tenureMo
 const generateEMIExpenses = async (client, loanId, userId, loanName, paymentSchedule) => {
     try {
         for (const payment of paymentSchedule) {
-            const [year, month, day] = payment.payment_date.split('-');
+            const [year, month] = payment.payment_date.split('-');
             const monthYear = `${year}-${month}`;
             
             // Use same status and paid_on from payment schedule
@@ -75,7 +75,7 @@ const generateEMIExpenses = async (client, loanId, userId, loanName, paymentSche
                     payment.payment_number,
                     `EMI - ${loanName}`,
                     payment.emi_amount,
-                    `EMI Payment #${payment.payment_number}`,
+                    `EMI Payment #${payment.payment_number} - ${loanName}`,
                     'bank_transfer',
                     monthYear,
                     payment.payment_date,
@@ -265,41 +265,6 @@ exports.getLoans = async (req, res) => {
     }
 };
 
-// ---------------------- GET LOAN DETAILS -------------------------
-exports.getLoanDetails = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { id } = req.params;
-
-        // Get loan
-        const loanResult = await pool.query(
-            "SELECT * FROM loans WHERE id = $1 AND user_id = $2",
-            [id, userId]
-        );
-
-        if (loanResult.rows.length === 0) {
-            return res.status(404).json({ error: "Loan not found" });
-        }
-
-        // Get all payments
-        const paymentsResult = await pool.query(
-            "SELECT * FROM loan_payments WHERE loan_id = $1 ORDER BY payment_number ASC",
-            [id]
-        );
-
-        const formattedLoan = pool.formatRows([loanResult.rows[0]])[0];
-        const formattedPayments = pool.formatRows(paymentsResult.rows);
-
-        res.json({
-            loan: formattedLoan,
-            payments: formattedPayments
-        });
-    } catch (err) {
-        console.error("Get loan details error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
-    }
-};
-
 // ---------------------- UPDATE LOAN -------------------------
 exports.updateLoan = async (req, res) => {
     try {
@@ -375,42 +340,6 @@ exports.closeLoan = async (req, res) => {
         res.status(500).json({ error: "Server error", details: err.message });
     } finally {
         client.release();
-    }
-};
-
-// ---------------------- GET LOAN PAYMENTS -------------------------
-exports.getLoanPayments = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { id } = req.params;
-        const { status } = req.query;
-
-        // Verify loan ownership
-        const loanCheck = await pool.query(
-            "SELECT id FROM loans WHERE id = $1 AND user_id = $2",
-            [id, userId]
-        );
-
-        if (loanCheck.rows.length === 0) {
-            return res.status(404).json({ error: "Loan not found" });
-        }
-
-        let query = "SELECT * FROM loan_payments WHERE loan_id = $1";
-        const params = [id];
-
-        if (status && ['pending', 'paid', 'overdue'].includes(status)) {
-            query += " AND status = $2";
-            params.push(status);
-        }
-
-        query += " ORDER BY payment_number ASC";
-
-        const result = await pool.query(query, params);
-
-        res.json({ payments: result.rows });
-    } catch (err) {
-        console.error("Get loan payments error:", err);
-        res.status(500).json({ error: "Server error", details: err.message });
     }
 };
 

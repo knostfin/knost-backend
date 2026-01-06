@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-unused-vars
 module.exports = function (err, req, res, next) {
   console.error(err);
   const payload = { error: "Server error" };
